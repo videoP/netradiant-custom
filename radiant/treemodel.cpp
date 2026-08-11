@@ -163,6 +163,18 @@ public:
 		return m_childnodes.insert( std::lower_bound( begin(), end(), value, Compare() ), value );
 //.		ASSERT_MESSAGE( inserted, "GraphTreeNode::insert: already added" );
 	}
+	// bulk build: append unsorted, then sort_children() once per parent.
+	// insert() is O(n) per call, so streaming a whole map through it is O(n^2).
+	void push_back( GraphTreeNode* value ){
+		value->m_parent = this;
+		m_childnodes.push_back( value );
+	}
+	void sort_children(){
+		std::sort( begin(), end(), Compare() );
+	}
+	void clear_children(){
+		m_childnodes.clear();
+	}
 	void erase( iterator i ){
 		m_childnodes.erase( i );
 	}
@@ -265,6 +277,10 @@ public:
 		return 1;
 	}
 	void insert( const scene::Instance& instance ) {
+		if ( m_suspended ) {
+			return;
+		}
+
 		auto [parent, index] = findParents( instance.path() );
 
 		const int n = parent->lower_bound( node_get_name_safe( instance.path().top().get() ), instance.path().top().get_pointer() );
@@ -276,6 +292,10 @@ public:
 		node_attach_name_changed_callback( instance.path().top(), ConstReferenceCaller<scene::Instance, void(const char*), graph_tree_model_set_name>( instance ) );
 	}
 	void remove( const scene::Instance& instance ) {
+		if ( m_suspended ) {
+			return;
+		}
+
 		node_detach_name_changed_callback( instance.path().top(), ConstReferenceCaller<scene::Instance, void(const char*), graph_tree_model_set_name>( instance ) );
 
 		auto [parent, index] = findParents( instance.path() );
@@ -291,6 +311,10 @@ public:
 		endRemoveRows();
 	}
 	void rename( const scene::Instance& instance, const char* name ){
+		if ( m_suspended ) {
+			return;
+		}
+
 		auto [parent, index] = findParents( instance.path() );
 
 		GraphTreeNode::iterator i = parent->find( node_get_name_safe( instance.path().top().get() ), instance.path().top().get_pointer() );
@@ -311,8 +335,86 @@ public:
 			endMoveRows();
 		}
 	}
+
+	/* --- deferred population (see largemap.h) ---
+
+	   While suspended the model holds nothing and insert/remove/rename are
+	   no-ops, so creating a primitive costs nothing here. populate() rebuilds
+	   the whole tree in one pass, appending children and sorting each parent
+	   once - O(n log n) against insert()'s O(n^2). */
+
+	bool suspended() const {
+		return m_suspended;
+	}
+
+	void suspend(){
+		if ( !m_suspended ) {
+			clear();
+			m_suspended = true;
+		}
+	}
+
+	void populate(){
+		if ( !m_suspended ) {
+			return;
+		}
+		beginResetModel();
+		m_suspended = false;
+		PopulateWalker walker( rootItem );
+		GlobalSceneGraph().traverse( walker );
+		rootItem->sort_children();
+		endResetModel();
+	}
+
 private:
+	class PopulateWalker : public scene::Graph::Walker
+	{
+		mutable std::vector<GraphTreeNode*> m_stack;
+	public:
+		PopulateWalker( GraphTreeNode* root ){
+			m_stack.push_back( root );
+		}
+		bool pre( const scene::Path& path, scene::Instance& instance ) const override {
+			GraphTreeNode* node = new GraphTreeNode( instance, node_get_name_safe( path.top().get() ), path.top().get_pointer() );
+			m_stack.back()->push_back( node );
+			m_stack.push_back( node );
+			node_attach_name_changed_callback( path.top(), ConstReferenceCaller<scene::Instance, void(const char*), graph_tree_model_set_name>( instance ) );
+			return true;
+		}
+		void post( const scene::Path& path, scene::Instance& instance ) const override {
+			m_stack.back()->sort_children();
+			m_stack.pop_back();
+		}
+	};
+
+	static void deleteSubtree( GraphTreeNode* node ){
+		for ( GraphTreeNode* child : *node )
+		{
+			deleteSubtree( child );
+		}
+		node->clear_children();
+		if ( node->m_node != nullptr ) {
+			node_detach_name_changed_callback( *node->m_node,
+			    ConstReferenceCaller<scene::Instance, void(const char*), graph_tree_model_set_name>( node->m_instance.get() ) );
+		}
+		delete node;
+	}
+
+	void clear(){
+		if ( rootItem->empty() ) {
+			return;
+		}
+		beginResetModel();
+		for ( GraphTreeNode* child : *rootItem )
+		{
+			deleteSubtree( child );
+		}
+		rootItem->clear_children();
+		endResetModel();
+	}
+
 	GraphTreeNode *rootItem;
+	bool m_suspended = false;
 };
 
 GraphTreeModel* graph_tree_model_new(){
@@ -335,5 +437,31 @@ void graph_tree_model_erase( GraphTreeModel* model, const scene::Instance& insta
 GraphTreeModel* scene_graph_get_tree_model(); // temp hack
 void graph_tree_model_set_name( const scene::Instance& instance, const char* name ){
 	scene_graph_get_tree_model()->rename( instance, name );
+}
+
+void graph_tree_model_suspend( GraphTreeModel* model ){
+	model->suspend();
+}
+
+void graph_tree_model_populate( GraphTreeModel* model ){
+	model->populate();
+}
+
+bool graph_tree_model_suspended( GraphTreeModel* model ){
+	return model->suspended();
+}
+
+#include "largemap.h"
+
+void graph_tree_model_entitylist_shown(){
+	if ( g_largemap_deferEntityList.m_value ) {
+		scene_graph_get_tree_model()->populate();
+	}
+}
+
+void graph_tree_model_entitylist_hidden(){
+	if ( g_largemap_deferEntityList.m_value ) {
+		scene_graph_get_tree_model()->suspend();
+	}
 }
 

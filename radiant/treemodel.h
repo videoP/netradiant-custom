@@ -31,6 +31,17 @@ class Instance;
 void graph_tree_model_insert( GraphTreeModel* model, const scene::Instance& instance );
 void graph_tree_model_erase( GraphTreeModel* model, const scene::Instance& instance );
 
+/// \brief Empties the model and makes insert/erase/rename no-ops until graph_tree_model_populate().
+void graph_tree_model_suspend( GraphTreeModel* model );
+/// \brief Rebuilds the whole model from the scene graph in one O(n log n) pass, and resumes incremental updates.
+void graph_tree_model_populate( GraphTreeModel* model );
+bool graph_tree_model_suspended( GraphTreeModel* model );
+
+/* Entity List visibility hooks. No-ops unless the deferred-population
+   preference is on, so stock behaviour is unaffected. */
+void graph_tree_model_entitylist_shown();
+void graph_tree_model_entitylist_hidden();
+
 
 #include <qnamespace.h>
 constexpr int c_ItemDataRole_Instance = Qt::ItemDataRole::UserRole + 1;

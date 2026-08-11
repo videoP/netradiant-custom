@@ -27,3 +27,5 @@ void EntityList_Destroy();
 void EntityList_constructWindow( class QWidget* main_window );
 void EntityList_destroyWindow();
 void EntityList_toggleShown();
+/// \brief Returns true if the Entity List window exists and is currently shown.
+bool EntityList_visible();

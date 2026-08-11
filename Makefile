@@ -912,6 +912,7 @@ $(INSTALLDIR)/radiant.$(EXE): \
 	radiant/gtkmisc.o \
 	radiant/help.o \
 	radiant/image.o \
+	radiant/largemap.o \
 	radiant/layerswindow.o \
 	radiant/mainframe.o \
 	radiant/main.o \

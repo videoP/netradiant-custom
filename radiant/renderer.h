@@ -26,6 +26,7 @@
 #include "iselection.h"
 #include "cullable.h"
 #include "scenelib.h"
+#include "scenegraph.h"
 #include "math/frustum.h"
 #include <vector>
 
@@ -166,6 +167,6 @@ public:
 };
 
 inline void Scene_Render( Renderer& renderer, const VolumeTest& volume ){
-	GlobalSceneGraph().traverse( ForEachVisible<RenderHighlighted>( volume, RenderHighlighted( renderer, volume ) ) );
+	Scene_traverseVisible( GlobalSceneGraph(), volume, ForEachVisible<RenderHighlighted>( volume, RenderHighlighted( renderer, volume ) ) );
 	GlobalShaderCache().forEachRenderable( RenderHighlighted::RenderCaller( RenderHighlighted( renderer, volume ) ) );
 }

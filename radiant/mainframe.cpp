@@ -97,6 +97,7 @@
 #include "pluginmenu.h"
 #include "plugintoolbar.h"
 #include "preferences.h"
+#include "largemap.h"
 #include "qe3.h"
 #include "qgl.h"
 #include "select.h"
@@ -2136,6 +2137,7 @@ void MainFrame_Construct(){
 
 	Layout_registerPreferencesPage();
 	Paths_registerPreferencesPage();
+	LargeMap_Construct();
 
 	g_brushCount.setCountChangedCallback( makeCallbackF( QE_brushCountChanged ) );
 	g_patchCount.setCountChangedCallback( makeCallbackF( QE_brushCountChanged ) );

@@ -175,12 +175,21 @@ void EntityList_SelectionChanged( const Selectable& selectable ){
 
 
 void EntityList_SetShown( bool shown ){
+	if( shown ) /* build the model now, if its population was deferred */
+		graph_tree_model_entitylist_shown();
+
 	getEntityList().m_window->setVisible( shown );
 	if( shown ){ /* expand map's root node for convenience */
 		auto index = getEntityList().m_tree_model->index( 0, 0 );
 		if( index.isValid() && !getEntityList().m_tree_view->isExpanded( index ) )
 			getEntityList().m_tree_view->expand( index );
 	}
+	else /* nobody is reading the model now; drop it and stop maintaining it */
+		graph_tree_model_entitylist_hidden();
+}
+
+bool EntityList_visible(){
+	return getEntityList().m_window != 0 && getEntityList().visible();
 }
 
 void EntityList_toggleShown(){

@@ -31,6 +31,86 @@
 #include "instancelib.h"
 #include "treemodel.h"
 #include "layers.h"
+#include "entitylist.h"
+#include "largemap.h"
+
+#include "cullable.h"
+#include "math/frustum.h"
+#include "math/aabb.h"
+
+#include <unordered_map>
+#include <vector>
+#include <cstdint>
+#include <cmath>
+
+namespace
+{
+// declared here so CompiledGraph's inline members can see it; defined once below
+GraphTreeModel* g_tree_model;
+}
+
+
+/*! \brief A sparse uniform grid over a set of sibling leaf instances.
+
+    Each instance is filed in the single cell containing its AABB centre, and
+    that cell's bounds are grown to contain the instance outright. Culling then
+    tests the grown cell bounds, which is conservative, so no instance is ever
+    wrongly rejected and nothing needs to be stored twice.
+ */
+class InstanceGrid
+{
+	struct Cell
+	{
+		AABB bounds;
+		std::vector<scene::Instance*> instances;
+	};
+
+	std::unordered_map<std::uint64_t, Cell> m_cells;
+
+	static const double c_cellSize;
+	static const std::int64_t c_cellMask = 0x1fffff; // 21 bits per axis
+
+	static std::uint64_t cellKey( const Vector3& point ){
+		const auto coord = []( double v ){
+			return static_cast<std::int64_t>( std::floor( v / c_cellSize ) ) & c_cellMask;
+		};
+		return static_cast<std::uint64_t>( coord( point.x() ) )
+		     | ( static_cast<std::uint64_t>( coord( point.y() ) ) << 21 )
+		     | ( static_cast<std::uint64_t>( coord( point.z() ) ) << 42 );
+	}
+
+public:
+	void insert( scene::Instance* instance ){
+		const AABB& aabb = instance->worldAABB();
+		Cell& cell = m_cells[ cellKey( aabb.origin ) ];
+		aabb_extend_by_aabb_safe( cell.bounds, aabb ); // handles a still-invalid cell AABB
+		cell.instances.push_back( instance );
+	}
+
+	std::size_t cellCount() const {
+		return m_cells.size();
+	}
+
+	void traverse( const scene::Graph::Walker& walker, const VolumeTest& volume ) const {
+		for ( const auto& [ key, cell ] : m_cells )
+		{
+			if ( volume.TestAABB( cell.bounds ) == c_volumeOutside ) {
+				continue;
+			}
+			for ( scene::Instance* instance : cell.instances )
+			{
+				// gridded instances are leaves, so pre()'s return value has nothing to prune
+				walker.pre( instance->path(), *instance );
+				walker.post( instance->path(), *instance );
+			}
+		}
+	}
+};
+
+const double InstanceGrid::c_cellSize = 1024.0;
+
+/// \brief Minimum sibling leaf count before a grid is worth building for a parent.
+const std::size_t c_minChildrenForGrid = 1024;
 
 template<std::size_t SIZE>
 class TypeIdMap
@@ -68,6 +148,11 @@ class CompiledGraph final : public scene::Graph, public scene::Instantiable::Obs
 	TypeIdMap<NODETYPEID_MAX> m_nodeTypeIds;
 	TypeIdMap<INSTANCETYPEID_MAX> m_instanceTypeIds;
 
+	std::unordered_map<scene::Instance*, InstanceGrid> m_grids;
+	bool m_indexDirty = true;          // instances added/removed: grids unusable until rebuilt
+	bool m_indexBoundsDirty = false;   // something moved: fall back this frame, rebuild after
+	bool m_indexRebuildPending = false;
+
 public:
 
 	CompiledGraph( scene::Instantiable::Observer* observer )
@@ -92,11 +177,23 @@ public:
 
 		root.IncRef();
 
+		/* Streaming a whole map through the tree model one insert at a time is
+		   O(n^2); suspend it and rebuild in one pass afterwards, and only if
+		   anything is actually looking at it. */
+		const bool defer = g_largemap_deferEntityList.m_value;
+		if ( defer ) {
+			graph_tree_model_suspend( g_tree_model );
+		}
+
 		Node_traverseSubgraph( root, InstanceSubgraphWalker( this, scene::Path(), 0 ) );
 
 		m_rootpath.push( makeReference( root ) );
 
 		m_currentLayer = &Node_getLayers( root )->m_currentLayer;
+
+		if ( defer && EntityList_visible() ) {
+			graph_tree_model_populate( g_tree_model );
+		}
 	}
 	void erase_root() override {
 		//globalOutputStream() << "erase_root\n";
@@ -106,6 +203,11 @@ public:
 		scene::Node& root = m_rootpath.top();
 
 		m_rootpath.pop();
+
+		/* likewise: erasing one at a time is O(n^2) */
+		if ( g_largemap_deferEntityList.m_value ) {
+			graph_tree_model_suspend( g_tree_model );
+		}
 
 		Node_traverseSubgraph( root, UninstanceSubgraphWalker( this, scene::Path() ) );
 
@@ -117,11 +219,44 @@ public:
 		return *m_currentLayer;
 	}
 	void boundsChanged() override {
+		m_indexBoundsDirty = true;
 		m_boundsChanged();
 	}
 
 	void traverse( const Walker& walker ) override {
 		traverse_subgraph( walker, m_instances.begin() );
+	}
+
+	/* --- spatial index (see largemap.h) --- */
+
+	void traverse_visible( const Walker& walker, const VolumeTest& volume ){
+		if ( !g_largemap_spatialIndex.m_value || m_instances.empty() ) {
+			traverse( walker );
+			return;
+		}
+
+		if ( m_indexDirty ) {
+			/* Instances were added or removed, so the grids may hold dangling
+			   pointers - they cannot be used at all until rebuilt. */
+			rebuildIndex();
+		}
+		else if ( m_indexBoundsDirty ) {
+			/* Something moved. Rather than rebuild mid-drag, fall back to the
+			   stock traversal for this frame and rebuild once it settles. */
+			m_indexBoundsDirty = false;
+			m_indexRebuildPending = true;
+			traverse( walker );
+			return;
+		}
+		else if ( m_indexRebuildPending ) {
+			rebuildIndex();
+		}
+
+		InstanceMap::iterator i = m_instances.begin();
+		while ( i != m_instances.end() )
+		{
+			traverse_visible_recursive( walker, i, volume );
+		}
 	}
 
 	void traverse_subgraph( const Walker& walker, const scene::Path& start ) override {
@@ -140,6 +275,7 @@ public:
 
 	void insert( scene::Instance* instance ) override {
 		m_instances.insert( InstanceMap::value_type( PathConstReference( instance->path() ), instance ) );
+		m_indexDirty = true;
 
 		m_observer->insert( instance );
 	}
@@ -147,6 +283,7 @@ public:
 		m_observer->erase( instance );
 
 		m_instances.erase( PathConstReference( instance->path() ) );
+		m_indexDirty = true; // grids now hold a dangling pointer; must rebuild before next use
 	}
 
 	SignalHandlerId addBoundsChangedCallback( const SignalHandler& boundsChanged ) override {
@@ -172,6 +309,91 @@ private:
 
 	void post( const Walker& walker, const InstanceMap::iterator& i ){
 		walker.post( i->first, *i->second );
+	}
+
+	/*! \brief Visits the subtree rooted at \p i, advancing \p i past it.
+
+	    Children of an instance are the following entries whose path is exactly
+	    one longer; the map being path-sorted keeps a whole subtree contiguous.
+	    Where a parent has a grid, its children are skipped in the map and
+	    visited through the grid instead.
+	 */
+	void traverse_visible_recursive( const Walker& walker, InstanceMap::iterator& i, const VolumeTest& volume ){
+		const InstanceMap::iterator self = i;
+		const std::size_t depth = self->first.get().size();
+		++i;
+
+		if ( walker.pre( self->first, *self->second ) ) {
+			const auto grid = m_grids.find( self->second );
+			if ( grid != m_grids.end() ) {
+				while ( i != m_instances.end() && i->first.get().size() > depth )
+					++i; // gridded children are leaves; skip the run in the map
+				grid->second.traverse( walker, volume );
+			}
+			else{
+				while ( i != m_instances.end() && i->first.get().size() > depth )
+					traverse_visible_recursive( walker, i, volume );
+			}
+		}
+		else{
+			while ( i != m_instances.end() && i->first.get().size() > depth )
+				++i; // subtree skipped
+		}
+
+		walker.post( self->first, *self->second );
+	}
+
+	/// \brief Collects the leaf children of \p i's subtree, building a grid for any
+	/// parent with enough of them to be worth it. Advances \p i past the subtree.
+	void buildGrids( InstanceMap::iterator& i ){
+		const InstanceMap::iterator self = i;
+		const std::size_t depth = self->first.get().size();
+		++i;
+
+		std::vector<scene::Instance*> leafChildren;
+		bool allLeaves = true;
+
+		while ( i != m_instances.end() && i->first.get().size() > depth )
+		{
+			const InstanceMap::iterator child = i;
+			buildGrids( i );
+			if ( std::next( child ) == i ) { // consumed exactly one entry, so it is a leaf
+				leafChildren.push_back( child->second );
+			}
+			else{
+				allLeaves = false;
+			}
+		}
+
+		if ( allLeaves && leafChildren.size() >= c_minChildrenForGrid ) {
+			InstanceGrid& grid = m_grids[ self->second ];
+			for ( scene::Instance* instance : leafChildren )
+			{
+				grid.insert( instance );
+			}
+		}
+	}
+
+	void rebuildIndex(){
+		m_grids.clear();
+
+		InstanceMap::iterator i = m_instances.begin();
+		while ( i != m_instances.end() )
+		{
+			buildGrids( i );
+		}
+
+		/* Evaluating instance bounds during the build dirties the bounds flag;
+		   clear it last so the index is not immediately considered stale. */
+		m_indexDirty = false;
+		m_indexBoundsDirty = false;
+		m_indexRebuildPending = false;
+
+		std::size_t cells = 0;
+		for ( const auto& [ parent, grid ] : m_grids )
+			cells += grid.cellCount();
+		globalOutputStream() << "spatial index: " << Unsigned( m_grids.size() ) << " indexed parents, "
+		                     << Unsigned( cells ) << " cells\n";
 	}
 
 	void traverse_subgraph( const Walker& walker, InstanceMap::iterator i ){
@@ -207,11 +429,19 @@ private:
 namespace
 {
 CompiledGraph* g_sceneGraph;
-GraphTreeModel* g_tree_model;
 }
 
 GraphTreeModel* scene_graph_get_tree_model(){
 	return g_tree_model;
+}
+
+void Scene_traverseVisible( scene::Graph& graph, const VolumeTest& volume, const scene::Graph::Walker& walker ){
+	if ( &graph == g_sceneGraph ) {
+		g_sceneGraph->traverse_visible( walker, volume );
+	}
+	else{
+		graph.traverse( walker );
+	}
 }
 
 
