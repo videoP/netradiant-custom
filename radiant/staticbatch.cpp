@@ -146,6 +146,12 @@ public:
 	/// skipped so the selected brush can draw its own highlight.
 	std::size_t m_batchedCount = 0;
 
+	/* 2D outlines take their colour from the owning entity, and one chunk can
+	   hold brushes from several. Only chunks that are purely worldspawn's get
+	   an outline batch; the rest draw their outlines individually, in the right
+	   colour. The solid pass has no such constraint - it colours by shader. */
+	bool m_wireEligible = true;
+
 	// 2D outlines: one vertex buffer, one index set per view direction
 	GLuint m_wireVbo = 0;
 	std::vector<std::size_t> m_wireBase; // first vertex of each brush, parallel to m_brushes
@@ -253,14 +259,19 @@ std::size_t g_reject_aabb;
 /* Enough to tell "the map is unusual" from "the walker is wrong". Reported
    only when something was turned away, or when nothing was taken at all. */
 std::size_t g_offered, g_accepted, g_reject_notbrush, g_reject_selected,
-            g_reject_hidden, g_reject_transform, g_entities_seen, g_entities_worldspawn;
+            g_reject_hidden, g_reject_transform, g_entities_seen;
 
-/// \brief Collects the batchable brushes of the map.
-///
-/// Only direct children of worldspawn are taken. That excludes brush entities
-/// outright, which sidesteps two whole classes of invalidation bug: a moving
-/// parent transform, and parentSelected() changing without any notification
-/// reaching the brushes underneath.
+/*! \brief Collects the batchable brushes of the map.
+
+    Any entity's brushes are taken, not only worldspawn's. Restricting it to
+    worldspawn stood in for two notifications that did not exist: a parent
+    moving, and parentSelected() changing, neither of which touches the brushes
+    underneath. scene::Graph::instanceRenderChanged() now supplies both, and a
+    parent carrying a transform of its own is excluded here anyway.
+
+    Measured on a 339k primitive map whose geometry lives under a brush entity
+    rather than worldspawn: 6 chunks batched, 155k draw calls a frame, ~5fps.
+ */
 class BatchableWalker : public scene::Graph::Walker
 {
 	StaticBatchCache& m_cache;
@@ -276,12 +287,11 @@ public:
 			return true; // the scene root itself; descend to the entities
 		}
 		if ( path.size() == 2 ) {
-			m_inWorldspawn = ( &path.top().get() == m_worldspawn );
 			++g_entities_seen;
-			g_entities_worldspawn += m_inWorldspawn ? 1 : 0;
-			return m_inWorldspawn; // nothing else in the map is batchable
+			m_inWorldspawn = ( &path.top().get() == m_worldspawn );
+			return true; // descend into any entity's primitives
 		}
-		if ( path.size() != 3 || !m_inWorldspawn ) {
+		if ( path.size() != 3 ) {
 			return false;
 		}
 
@@ -292,7 +302,7 @@ public:
 			++g_reject_notbrush;
 			return false;
 		}
-		if ( brush->isSelected() ) {
+		if ( brush->isSelected() || instance.parentSelected() ) {
 			++g_reject_selected;
 			return false;
 		}
@@ -316,6 +326,7 @@ public:
 		Chunk& chunk = m_cache.m_chunks[ key ];
 		aabb_extend_by_aabb_safe( chunk.m_bounds, aabb );
 		chunk.m_brushes.push_back( brush );
+		chunk.m_wireEligible = chunk.m_wireEligible && m_inWorldspawn;
 		brush->m_staticBatchChunk = key;
 
 		return false;
@@ -529,7 +540,7 @@ void Chunk::buildWire( int direction, const VolumeTest& volume ){
 }
 
 bool Chunk::renderWire( Renderer& renderer, const VolumeTest& volume, int direction, Shader* shader ){
-	if ( m_dirty || m_brushes.empty() ) {
+	if ( m_dirty || m_brushes.empty() || !m_wireEligible ) {
 		return false;
 	}
 	/* Cull before building: an off-screen chunk is never asked about coverage,
@@ -577,8 +588,7 @@ void StaticBatchCache::build(){
 	}
 
 	g_reject_aabb = g_offered = g_accepted = g_reject_notbrush = g_reject_selected
-	              = g_reject_hidden = g_reject_transform = g_entities_seen
-	              = g_entities_worldspawn = 0;
+	              = g_reject_hidden = g_reject_transform = g_entities_seen = 0;
 
 	GlobalSceneGraph().traverse( BatchableWalker( *this, worldspawn ) );
 
@@ -696,7 +706,7 @@ bool StaticBatch_cellCovered( std::uint64_t key, std::size_t instanceCount ){
 		return false;
 	}
 	return g_cache.m_wireStyle
-	     ? chunk->m_wire[ g_cache.m_wireDirection ].m_built
+	     ? ( chunk->m_wireEligible && chunk->m_wire[ g_cache.m_wireDirection ].m_built )
 	     : !chunk->m_ranges.empty();
 }
 
@@ -709,6 +719,15 @@ void StaticBatch_brushChanged( const BrushInstance& instance ){
 	}
 	if ( Chunk* chunk = g_cache.findChunk( instance.m_staticBatchChunk ) ) {
 		chunk->soil();
+	}
+}
+
+void StaticBatch_instanceChanged( scene::Instance& instance ){
+	if ( g_cache.m_chunks.empty() ) {
+		return; // nothing batched, so nothing can be stale
+	}
+	if ( BrushInstance* brush = InstanceTypeCast<BrushInstance>::cast( instance ) ) {
+		StaticBatch_brushChanged( *brush );
 	}
 }
 

@@ -192,6 +192,10 @@ public:
 		boundsChanged(); // nothing here is spatially indexed
 	}
 
+	void instanceRenderChanged( scene::Instance& instance ) override {
+		// nothing here is batched
+	}
+
 	void clear(){
 		DeleteSubgraph( root() );
 	}

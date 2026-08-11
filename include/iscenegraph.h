@@ -138,6 +138,15 @@ public:
 	    lets the index repair just the cell holding it.
 	 */
 	virtual void instanceBoundsChanged( Instance& instance ) = 0;
+
+	/*! \brief \p instance's appearance or placement changed in a way that
+	    anything holding pre-combined geometry for it would not reflect.
+
+	    Raised when an ancestor is selected or moved, neither of which touches
+	    the instance itself, so nothing else tells it that a cached copy of its
+	    geometry has gone stale.
+	 */
+	virtual void instanceRenderChanged( Instance& instance ) = 0;
 };
 
 class Traversable

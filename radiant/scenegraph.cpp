@@ -302,6 +302,10 @@ public:
 		m_boundsChanged();
 	}
 
+	void instanceRenderChanged( scene::Instance& instance ) override {
+		StaticBatch_instanceChanged( instance );
+	}
+
 	void instanceBoundsChanged( scene::Instance& instance ) override {
 		/* Deferred, not applied here: the instance's bounds have just been
 		   invalidated, so its new AABB cannot be read until something asks for

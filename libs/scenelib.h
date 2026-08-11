@@ -664,6 +664,8 @@ public:
 		m_boundsChanged = true;
 		m_childBoundsChanged = true;
 		m_transformChangedCallback();
+		// an ancestor moved, which moves this instance without touching it
+		GlobalSceneGraph().instanceRenderChanged( *this );
 	}
 	void transformChanged(){
 		GlobalSceneGraph().traverse_subgraph( TransformChangedWalker(), m_path );
@@ -729,6 +731,9 @@ public:
 
 	void parentSelectedChanged(){
 		m_parentSelectedChanged = true;
+		// an ancestor was selected; anything holding this instance's geometry
+		// pre-combined has to give it back so it can draw its own highlight
+		GlobalSceneGraph().instanceRenderChanged( *this );
 	}
 	bool parentSelected() const {
 		if ( m_parentSelectedChanged ) {

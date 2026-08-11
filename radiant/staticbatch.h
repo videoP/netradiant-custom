@@ -21,6 +21,7 @@
 class Renderer;
 class VolumeTest;
 class BrushInstance;
+namespace scene { class Instance; }
 
 /// \brief BrushInstance::m_staticBatchChunk when the brush belongs to no chunk.
 /// Chunk key 0 is a real key, so membership needs its own sentinel.
@@ -63,6 +64,9 @@ bool StaticBatch_cellCovered( std::uint64_t key, std::size_t instanceCount );
 void StaticBatch_brushChanged( const BrushInstance& instance );
 /// \brief The brush is about to be destroyed. Drops it from its chunk.
 void StaticBatch_brushRemoved( const BrushInstance& instance );
+/// \brief An ancestor of the instance was selected or moved. If it is a
+/// batched brush, its chunk is rebuilt so it can draw itself again.
+void StaticBatch_instanceChanged( scene::Instance& instance );
 
 /// \brief Discards everything; the next frame rebuilds from the scene.
 void StaticBatch_invalidate();
