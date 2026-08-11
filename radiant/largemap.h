@@ -37,4 +37,14 @@ extern LatchedBool g_largemap_spatialIndex;
  */
 extern LatchedBool g_largemap_staticBatch;
 
+/*! \brief Cache the union of a large container's child bounds instead of
+    recomputing it from every child.
+
+    A bounds change propagates to the parent, so worldspawn - which holds
+    practically the whole map - otherwise re-walks every brush after any edit,
+    and on every frame of a drag. Between structural changes the cached union is
+    only grown, which keeps it conservative.
+ */
+extern LatchedBool g_largemap_incrementalBounds;
+
 void LargeMap_Construct();

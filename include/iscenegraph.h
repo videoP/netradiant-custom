@@ -25,6 +25,8 @@
 #include "generic/constant.h"
 #include "signal/signalfwd.h"
 
+class AABB;
+
 template<typename value_type>
 class Stack;
 template<typename Contained>
@@ -116,6 +118,18 @@ public:
 
 	virtual TypeId getNodeTypeId( const char* name ) = 0;
 	virtual TypeId getInstanceTypeId( const char* name ) = 0;
+
+	/*! \brief Computes the union of the world bounds of \p instance's immediate
+	    children into \p bounds.
+
+	    Exists so the graph can cache the answer. Done naively this walks every
+	    child, and since a bounds change propagates to the parent, worldspawn -
+	    which holds practically the whole map - recomputes from scratch after
+	    any edit, and on every frame of a drag.
+
+	    Appended at the end of the interface deliberately: existing vtable slots
+	    keep their indices. */
+	virtual void childBounds( Instance& instance, AABB& bounds ) = 0;
 };
 
 class Traversable

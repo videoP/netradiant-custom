@@ -34,6 +34,7 @@
 #include "entitylist.h"
 #include "largemap.h"
 #include "staticbatch.h"
+#include "iselection.h"
 
 #include "cullable.h"
 #include "chunkgrid.h"
@@ -114,6 +115,34 @@ public:
 /// \brief Minimum sibling leaf count before a grid is worth building for a parent.
 const std::size_t c_minChildrenForGrid = 1024;
 
+/// \brief Minimum child count before caching an instance's child bounds pays for
+/// itself. Below this the walk is trivial, and caching every leaf would put an
+/// entry in the table for every brush in the map.
+const std::size_t c_minChildrenForBoundsCache = 256;
+
+/// \brief Accumulates the world bounds of an instance's immediate children.
+/// Counts them too, to decide whether the answer is worth caching.
+class AABBAccumulateWalker : public scene::Graph::Walker
+{
+	AABB& m_aabb;
+	std::size_t& m_count;
+	mutable std::size_t m_depth;
+public:
+	AABBAccumulateWalker( AABB& aabb, std::size_t& count )
+		: m_aabb( aabb ), m_count( count ), m_depth( 0 ){
+	}
+	bool pre( const scene::Path& path, scene::Instance& instance ) const override {
+		if ( m_depth == 1 ) {
+			aabb_extend_by_aabb_safe( m_aabb, instance.worldAABB() );
+			++m_count;
+		}
+		return ++m_depth != 2;
+	}
+	void post( const scene::Path& path, scene::Instance& instance ) const override {
+		--m_depth;
+	}
+};
+
 template<std::size_t SIZE>
 class TypeIdMap
 {
@@ -154,6 +183,26 @@ class CompiledGraph final : public scene::Graph, public scene::Instantiable::Obs
 	bool m_indexDirty = true;          // instances added/removed: grids unusable until rebuilt
 	bool m_indexBoundsDirty = false;   // something moved: fall back this frame, rebuild after
 	bool m_indexRebuildPending = false;
+
+	/// \brief Cached union of an instance's immediate children's world bounds.
+	/// Presence in the table means valid; a structural change drops the table.
+	struct ChildBounds
+	{
+		AABB m_bounds;
+		std::size_t m_generation = 0; // m_boundsGeneration when last brought up to date
+	};
+	std::unordered_map<scene::Instance*, ChildBounds> m_childBounds;
+	std::size_t m_boundsGeneration = 1;
+
+	/// \brief Something moved. Cached unions may grow but need no full rebuild.
+	void childBoundsMoved(){
+		++m_boundsGeneration;
+	}
+	/// \brief Instances were added or removed, so a cached union may now be
+	/// wrong in the direction that matters. Force full recomputes.
+	void childBoundsInvalidate(){
+		m_childBounds.clear();
+	}
 
 public:
 
@@ -226,6 +275,7 @@ public:
 	}
 	void boundsChanged() override {
 		m_indexBoundsDirty = true;
+		childBoundsMoved();
 		m_boundsChanged();
 	}
 
@@ -286,6 +336,7 @@ public:
 	void insert( scene::Instance* instance ) override {
 		m_instances.insert( InstanceMap::value_type( PathConstReference( instance->path() ), instance ) );
 		m_indexDirty = true;
+		childBoundsInvalidate();
 
 		m_observer->insert( instance );
 	}
@@ -294,6 +345,7 @@ public:
 
 		m_instances.erase( PathConstReference( instance->path() ) );
 		m_indexDirty = true; // grids now hold a dangling pointer; must rebuild before next use
+		childBoundsInvalidate();
 	}
 
 	SignalHandlerId addBoundsChangedCallback( const SignalHandler& boundsChanged ) override {
@@ -309,6 +361,47 @@ public:
 
 	TypeId getInstanceTypeId( const char* name ) override {
 		return m_instanceTypeIds.getTypeId( name );
+	}
+
+	/*! \brief \copydoc scene::Graph::childBounds()
+
+	    Stock behaviour recomputes from scratch, which for worldspawn walks the
+	    whole map. It has to happen after a structural change, but not after a
+	    brush merely moves - and moving is what happens on every frame of a drag.
+
+	    So between structural changes the cached union is only ever grown, by
+	    the bounds of the selection, since an instance can only move while it is
+	    selected. Growing keeps the result conservative: a union that is too
+	    large costs a little culling accuracy, one that is too small would drop
+	    geometry, and only the former can happen here.
+	 */
+	void childBounds( scene::Instance& instance, AABB& bounds ) override {
+		std::size_t count = 0;
+
+		if ( g_largemap_incrementalBounds.m_value ) {
+			const auto cached = m_childBounds.find( &instance );
+			if ( cached != m_childBounds.end() ) {
+				if ( cached->second.m_generation != m_boundsGeneration ) {
+					const AABB selected = GlobalSelectionSystem().getBoundsSelected();
+					if ( aabb_valid( selected ) ) {
+						aabb_extend_by_aabb_safe( cached->second.m_bounds, selected );
+					}
+					cached->second.m_generation = m_boundsGeneration;
+				}
+				bounds = cached->second.m_bounds;
+				return;
+			}
+		}
+
+		bounds = AABB();
+		traverse_subgraph( AABBAccumulateWalker( bounds, count ), instance.path() );
+
+		// only containers big enough to hurt are worth an entry
+		if ( g_largemap_incrementalBounds.m_value && count >= c_minChildrenForBoundsCache ) {
+			ChildBounds& entry = m_childBounds[ &instance ];
+			entry.m_bounds = bounds;
+			entry.m_generation = m_boundsGeneration;
+		}
 	}
 
 private:

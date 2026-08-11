@@ -12,6 +12,7 @@
 LatchedBool g_largemap_deferEntityList( false, "Deferred Entity List population" );
 LatchedBool g_largemap_spatialIndex( false, "Spatial index for view culling" );
 LatchedBool g_largemap_staticBatch( false, "Batched static geometry" );
+LatchedBool g_largemap_incrementalBounds( false, "Cached container bounds" );
 
 
 void LargeMap_constructPreferences( PreferencesPage& page ){
@@ -57,6 +58,20 @@ void LargeMap_constructPreferences( PreferencesPage& page ){
 	    "itself off in the 3D view's Lighting and Wireframe modes, which it\n"
 	    "cannot draw correctly."
 	);
+	page.appendCheckBox(
+	    "Editing", "Cached container bounds",
+	    LatchedImportCaller( g_largemap_incrementalBounds ),
+	    BoolExportCaller( g_largemap_incrementalBounds.m_latched )
+	)->setToolTip(
+	    "Makes editing on a large map cheaper.\n\n"
+	    "Changing one brush marks worldspawn's overall size as unknown, and\n"
+	    "recomputing it measures every brush in the map. That happens after any\n"
+	    "edit and on every frame while you drag. This remembers the answer and\n"
+	    "only widens it as things move.\n\n"
+	    "The remembered size can end up slightly larger than the truth until the\n"
+	    "next time brushes are added or deleted, which costs a little culling\n"
+	    "accuracy and nothing else."
+	);
 	/* To read the effect of these: View / Show Stats. */
 }
 
@@ -79,6 +94,11 @@ void LargeMap_Construct(){
 	    "LargeMapSpatialIndex",
 	    makeBoolStringImportCallback( LatchedAssignCaller( g_largemap_spatialIndex ) ),
 	    BoolExportStringCaller( g_largemap_spatialIndex.m_latched )
+	);
+	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapIncrementalBounds",
+	    makeBoolStringImportCallback( LatchedAssignCaller( g_largemap_incrementalBounds ) ),
+	    BoolExportStringCaller( g_largemap_incrementalBounds.m_latched )
 	);
 	GlobalPreferenceSystem().registerPreference(
 	    "LargeMapStaticBatch",

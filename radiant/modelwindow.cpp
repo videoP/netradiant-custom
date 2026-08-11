@@ -66,6 +66,25 @@
 
 
 /* specialized copy of class CompiledGraph */
+/// \brief Accumulates the world bounds of an instance's immediate children.
+class AABBAccumulateWalker : public scene::Graph::Walker
+{
+	AABB& m_aabb;
+	mutable std::size_t m_depth;
+public:
+	AABBAccumulateWalker( AABB& aabb ) : m_aabb( aabb ), m_depth( 0 ){
+	}
+	bool pre( const scene::Path& path, scene::Instance& instance ) const override {
+		if ( m_depth == 1 ) {
+			aabb_extend_by_aabb_safe( m_aabb, instance.worldAABB() );
+		}
+		return ++m_depth != 2;
+	}
+	void post( const scene::Path& path, scene::Instance& instance ) const override {
+		--m_depth;
+	}
+};
+
 class ModelGraph final : public scene::Graph, public scene::Instantiable::Observer
 {
 	typedef std::map<PathConstReference, scene::Instance*> InstanceMap;
@@ -161,6 +180,12 @@ public:
 	TypeId getInstanceTypeId( const char* name ) override {
 		ASSERT_MESSAGE( 0, "Reached unreachable: getInstanceTypeId()" );
 		return 0;
+	}
+
+	void childBounds( scene::Instance& instance, AABB& bounds ) override {
+		// a handful of nodes here; the plain accumulation is already cheap
+		bounds = AABB();
+		traverse_subgraph( AABBAccumulateWalker( bounds ), instance.path() );
 	}
 
 	void clear(){

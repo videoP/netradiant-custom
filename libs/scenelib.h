@@ -595,9 +595,10 @@ class Instance
 			ASSERT_MESSAGE( !m_childBoundsMutex, "re-entering bounds evaluation" );
 			m_childBoundsMutex = true;
 
-			m_childBounds = AABB();
-
-			GlobalSceneGraph().traverse_subgraph( AABBAccumulateWalker( m_childBounds ), m_path );
+			/* Delegated so the graph can cache it. Accumulating here walks every
+			   child, which for worldspawn means the whole map, after any edit
+			   and on every frame of a drag. */
+			GlobalSceneGraph().childBounds( const_cast<Instance&>( *this ), m_childBounds );
 
 			m_childBoundsMutex = false;
 			m_childBoundsChanged = false;
