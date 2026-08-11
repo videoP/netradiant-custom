@@ -130,6 +130,14 @@ public:
 	    Appended at the end of the interface deliberately: existing vtable slots
 	    keep their indices. */
 	virtual void childBounds( Instance& instance, AABB& bounds ) = 0;
+
+	/*! \brief \p instance's bounds have changed.
+
+	    The unqualified boundsChanged() cannot say what moved, which leaves a
+	    spatial index no choice but to rebuild wholesale. Knowing the instance
+	    lets the index repair just the cell holding it.
+	 */
+	virtual void instanceBoundsChanged( Instance& instance ) = 0;
 };
 
 class Traversable

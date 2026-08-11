@@ -688,7 +688,9 @@ public:
 		if ( m_parent != 0 ) {
 			m_parent->boundsChanged();
 		}
-		GlobalSceneGraph().boundsChanged();
+		// says which instance moved, so a spatial index can repair one cell
+		// rather than rebuild; also fires the scene's bounds-changed signal
+		GlobalSceneGraph().instanceBoundsChanged( *this );
 	}
 
 	void childSelectedChanged(){

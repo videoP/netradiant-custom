@@ -188,6 +188,10 @@ public:
 		traverse_subgraph( AABBAccumulateWalker( bounds ), instance.path() );
 	}
 
+	void instanceBoundsChanged( scene::Instance& instance ) override {
+		boundsChanged(); // nothing here is spatially indexed
+	}
+
 	void clear(){
 		DeleteSubgraph( root() );
 	}

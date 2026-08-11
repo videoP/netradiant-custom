@@ -75,13 +75,33 @@ class InstanceGrid
 	};
 
 	std::unordered_map<std::uint64_t, Cell> m_cells;
+	std::unordered_map<scene::Instance*, std::uint64_t> m_membership;
 
 public:
 	void insert( scene::Instance* instance ){
 		const AABB& aabb = instance->worldAABB();
-		Cell& cell = m_cells[ chunk_key( aabb.origin ) ];
+		const std::uint64_t key = chunk_key( aabb.origin );
+		Cell& cell = m_cells[ key ];
 		aabb_extend_by_aabb_safe( cell.bounds, aabb ); // handles a still-invalid cell AABB
 		cell.instances.push_back( instance );
+		m_membership.emplace( instance, key );
+	}
+
+	/*! \brief Repairs the cell holding \p instance after it moved.
+
+	    The instance stays in the cell it was filed in - moving it between cells
+	    would mean an erase from a vector - and the cell simply grows to keep
+	    containing it. Cells are already conservative by construction, so a
+	    slightly larger one costs a little culling accuracy and nothing else.
+	    Returns false if the instance is not in this grid.
+	 */
+	bool moved( scene::Instance* instance ){
+		const auto i = m_membership.find( instance );
+		if ( i == m_membership.end() ) {
+			return false;
+		}
+		aabb_extend_by_aabb_safe( m_cells[ i->second ].bounds, instance->worldAABB() );
+		return true;
 	}
 
 	std::size_t cellCount() const {
@@ -181,8 +201,7 @@ class CompiledGraph final : public scene::Graph, public scene::Instantiable::Obs
 
 	std::unordered_map<scene::Instance*, InstanceGrid> m_grids;
 	bool m_indexDirty = true;          // instances added/removed: grids unusable until rebuilt
-	bool m_indexBoundsDirty = false;   // something moved: fall back this frame, rebuild after
-	bool m_indexRebuildPending = false;
+	std::vector<scene::Instance*> m_moved; // moved since the last traversal; cells to grow
 
 	/// \brief Cached union of an instance's immediate children's world bounds.
 	/// Presence in the table means valid; a structural change drops the table.
@@ -274,9 +293,36 @@ public:
 		return *m_currentLayer;
 	}
 	void boundsChanged() override {
-		m_indexBoundsDirty = true;
 		childBoundsMoved();
 		m_boundsChanged();
+	}
+
+	void instanceBoundsChanged( scene::Instance& instance ) override {
+		/* Deferred, not applied here: the instance's bounds have just been
+		   invalidated, so its new AABB cannot be read until something asks for
+		   it. Repaired on the next traversal instead. */
+		if ( !m_grids.empty() ) {
+			m_moved.push_back( &instance );
+		}
+		boundsChanged();
+	}
+
+	/// \brief Grows the cells holding anything that moved, so the index stays
+	/// usable without a rebuild. O(moved), against O(map) for a rebuild.
+	void repairIndex(){
+		if ( m_moved.empty() ) {
+			return;
+		}
+		for ( scene::Instance* instance : m_moved )
+		{
+			for ( auto& [ parent, grid ] : m_grids )
+			{
+				if ( grid.moved( instance ) ) {
+					break;
+				}
+			}
+		}
+		m_moved.clear();
 	}
 
 	void traverse( const Walker& walker ) override {
@@ -298,16 +344,11 @@ public:
 			   pointers - they cannot be used at all until rebuilt. */
 			rebuildIndex();
 		}
-		else if ( m_indexBoundsDirty ) {
-			/* Something moved. Rather than rebuild mid-drag, fall back to the
-			   stock traversal for this frame and rebuild once it settles. */
-			m_indexBoundsDirty = false;
-			m_indexRebuildPending = true;
-			traverse( walker );
-			return;
-		}
-		else if ( m_indexRebuildPending ) {
-			rebuildIndex();
+		else{
+			/* Movement only ever needs the affected cells grown. Rebuilding on
+			   movement meant a drag rebuilt the whole index every frame - once
+			   per view, in fact, since several views traverse per frame. */
+			repairIndex();
 		}
 
 		g_index_used = true;
@@ -488,11 +529,11 @@ private:
 			buildGrids( i );
 		}
 
-		/* Evaluating instance bounds during the build dirties the bounds flag;
-		   clear it last so the index is not immediately considered stale. */
+		/* Evaluating instance bounds during the build records those instances as
+		   moved; drop that last, since the freshly built cells already contain
+		   them. */
 		m_indexDirty = false;
-		m_indexBoundsDirty = false;
-		m_indexRebuildPending = false;
+		m_moved.clear();
 
 		std::size_t cells = 0;
 		for ( const auto& [ parent, grid ] : m_grids )
