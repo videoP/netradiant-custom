@@ -8,6 +8,7 @@
 #include "map.h"
 #include "largemap.h"
 #include "chunkgrid.h"
+#include "scopetimer.h"
 
 #include "ientity.h"
 #include "ieclass.h"
@@ -249,6 +250,11 @@ inline bool brush_batchable( BrushInstance& instance ){
     collapses. Reported because a map full of them is worth knowing about. */
 std::size_t g_reject_aabb;
 
+/* Enough to tell "the map is unusual" from "the walker is wrong". Reported
+   only when something was turned away, or when nothing was taken at all. */
+std::size_t g_offered, g_accepted, g_reject_notbrush, g_reject_selected,
+            g_reject_hidden, g_reject_transform, g_entities_seen, g_entities_worldspawn;
+
 /// \brief Collects the batchable brushes of the map.
 ///
 /// Only direct children of worldspawn are taken. That excludes brush entities
@@ -271,17 +277,31 @@ public:
 		}
 		if ( path.size() == 2 ) {
 			m_inWorldspawn = ( &path.top().get() == m_worldspawn );
+			++g_entities_seen;
+			g_entities_worldspawn += m_inWorldspawn ? 1 : 0;
 			return m_inWorldspawn; // nothing else in the map is batchable
 		}
 		if ( path.size() != 3 || !m_inWorldspawn ) {
 			return false;
 		}
 
+		++g_offered;
+
 		BrushInstance* brush = InstanceTypeCast<BrushInstance>::cast( instance );
-		if ( brush == nullptr
-		  || brush->isSelected()
-		  || !path.top().get().visible()
-		  || !matrix4_affine_equal( instance.localToWorld(), g_matrix4_identity ) ) {
+		if ( brush == nullptr ) {
+			++g_reject_notbrush;
+			return false;
+		}
+		if ( brush->isSelected() ) {
+			++g_reject_selected;
+			return false;
+		}
+		if ( !path.top().get().visible() ) {
+			++g_reject_hidden;
+			return false;
+		}
+		if ( !matrix4_affine_equal( instance.localToWorld(), g_matrix4_identity ) ) {
+			++g_reject_transform;
 			return false;
 		}
 
@@ -290,6 +310,7 @@ public:
 			++g_reject_aabb;
 			return false;
 		}
+		++g_accepted;
 
 		const std::uint64_t key = chunk_key( aabb.origin );
 		Chunk& chunk = m_cache.m_chunks[ key ];
@@ -542,15 +563,22 @@ void Chunk::render( Renderer& renderer, const VolumeTest& volume ) const {
 
 
 void StaticBatchCache::build(){
+	ScopeTimer timer( "  static batch build" );
 	clear();
 
 	scene::Node* worldspawn = Map_GetWorldspawn( g_map );
 	if ( worldspawn == nullptr ) {
-		m_valid = true;
+		/* Deliberately left invalid so this is retried. Worldspawn is only
+		   identified after the scene root is inserted, and the loading progress
+		   window pumps the event loop in between - so a repaint lands here
+		   mid-load, and marking the empty result valid would cache "nothing is
+		   batchable" for the rest of the session. */
 		return;
 	}
 
-	g_reject_aabb = 0;
+	g_reject_aabb = g_offered = g_accepted = g_reject_notbrush = g_reject_selected
+	              = g_reject_hidden = g_reject_transform = g_entities_seen
+	              = g_entities_worldspawn = 0;
 
 	GlobalSceneGraph().traverse( BatchableWalker( *this, worldspawn ) );
 

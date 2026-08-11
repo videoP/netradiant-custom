@@ -22,6 +22,7 @@
 #include "parse.h"
 
 #include <list>
+#include <chrono>
 
 #include "ientity.h"
 #include "ibrush.h"
@@ -130,6 +131,60 @@ inline MapImporter* Node_getMapImporter( scene::Node& node ){
 }
 
 
+/*! \brief Where the time inside a map parse goes.
+
+    Parsing is about 80% of opening a map, and it is three quite different
+    jobs: making the primitive's objects, reading its text and building its
+    faces from it, and filing it under its entity. Each wants a different fix,
+    so measure before choosing one.
+
+    Two clock reads per primitive, against hundreds of thousands of primitives:
+    tens of milliseconds on a multi-second parse, small enough not to distort
+    what it is measuring.
+ */
+struct ParseStats
+{
+	class Accumulator
+	{
+		std::chrono::steady_clock::time_point m_begin;
+		std::chrono::steady_clock::duration m_total{};
+	public:
+		void start(){
+			m_begin = std::chrono::steady_clock::now();
+		}
+		void stop(){
+			m_total += std::chrono::steady_clock::now() - m_begin;
+		}
+		double seconds() const {
+			return std::chrono::duration<double>( m_total ).count();
+		}
+		void reset(){
+			m_total = {};
+		}
+	};
+
+	Accumulator m_create;   // constructing the primitive's node
+	Accumulator m_read;     // tokenising its text and building its faces
+	Accumulator m_insert;   // filing it under its entity
+	std::size_t m_primitives = 0;
+
+	void reset(){
+		m_create.reset();
+		m_read.reset();
+		m_insert.reset();
+		m_primitives = 0;
+	}
+	void report() const {
+		globalOutputStream() << "  parse detail: node create " << FloatFormat( m_create.seconds(), 5, 2 )
+		                     << "s, read+faces " << FloatFormat( m_read.seconds(), 5, 2 )
+		                     << "s, entity insert " << FloatFormat( m_insert.seconds(), 5, 2 )
+		                     << "s, over " << Unsigned( m_primitives ) << " primitives\n";
+	}
+};
+
+ParseStats g_parseStats;
+
+
 typedef std::list< std::pair<CopiedString, CopiedString> > KeyValues;
 
 NodeSmartReference g_nullNode( NewNullNode() );
@@ -173,8 +228,17 @@ NodeSmartReference Entity_parseTokens( Tokeniser& tokeniser, EntityCreator& enti
 
 			tokeniser.nextLine();
 
+			g_parseStats.m_create.start();
 			NodeSmartReference primitive( parser.parsePrimitive( tokeniser ) );
-			if ( primitive == g_nullNode || !Node_getMapImporter( primitive )->importTokens( tokeniser ) ) {
+			g_parseStats.m_create.stop();
+
+			bool parsed = ( primitive != g_nullNode );
+			if ( parsed ) {
+				g_parseStats.m_read.start();
+				parsed = Node_getMapImporter( primitive )->importTokens( tokeniser );
+				g_parseStats.m_read.stop();
+			}
+			if ( !parsed ) {
 				globalErrorStream() << "brush " << count_primitives << ": parse error\n";
 				return g_nullNode;
 			}
@@ -182,13 +246,16 @@ NodeSmartReference Entity_parseTokens( Tokeniser& tokeniser, EntityCreator& enti
 
 			scene::Traversable* traversable = Node_getTraversable( entity );
 			if ( Node_getEntity( entity )->isContainer() && traversable != 0 ) {
+				g_parseStats.m_insert.start();
 				traversable->insert( primitive );
+				g_parseStats.m_insert.stop();
 			}
 			else
 			{
 				globalErrorStream() << "entity " << index << ": type " << classname << ": discarding brush " << count_primitives << '\n';
 			}
 			++count_primitives;
+			++g_parseStats.m_primitives;
 		}
 		else // epair
 		{
@@ -209,6 +276,8 @@ NodeSmartReference Entity_parseTokens( Tokeniser& tokeniser, EntityCreator& enti
 }
 
 void Map_Read( scene::Node& root, Tokeniser& tokeniser, EntityCreator& entityTable, const PrimitiveParser& parser ){
+	g_parseStats.reset();
+
 	LayersParser layersParser( root );
 	if( !layersParser.read_layers( tokeniser ) ){
 		layersParser.construct_tree(); // construct anytime to have at least one layer, e.g. when empty .map
@@ -238,4 +307,6 @@ void Map_Read( scene::Node& root, Tokeniser& tokeniser, EntityCreator& entityTab
 
 		++count_entities;
 	}
+
+	g_parseStats.report();
 }

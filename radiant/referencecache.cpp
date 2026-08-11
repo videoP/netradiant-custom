@@ -60,6 +60,9 @@ void MapChanged(){
 }
 
 
+#include "scopetimer.h"
+#include "brushtokens.h"
+
 EntityCreator* g_entityCreator = 0;
 
 bool MapResource_loadFile( const MapFormat& format, scene::Node& root, const char* filename ){
@@ -69,7 +72,15 @@ bool MapResource_loadFile( const MapFormat& format, scene::Node& root, const cha
 		globalOutputStream() << "success\n";
 		ScopeDisableScreenUpdates disableScreenUpdates( path_get_filename_start( filename ), "Loading Map" );
 		ASSERT_NOTNULL( g_entityCreator );
-		format.readGraph( root, file, *g_entityCreator );
+		{
+			// reading the text, and building the nodes it describes
+			g_faceReadStats = FaceReadStats();
+			ScopeTimer timer( "  parse" );
+			format.readGraph( root, file, *g_entityCreator );
+		}
+		globalOutputStream() << "  face detail: construct " << FloatFormat( g_faceReadStats.m_construct, 5, 2 )
+		                     << "s, tokenise " << FloatFormat( g_faceReadStats.m_read, 5, 2 )
+		                     << "s, over " << Unsigned( g_faceReadStats.m_faces ) << " faces\n";
 		return true;
 	}
 	else

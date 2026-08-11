@@ -25,6 +25,8 @@
 #include "stream/stringstream.h"
 #include "brush.h"
 
+#include <chrono>
+
 inline bool FaceShader_importContentsFlagsValue( FaceShader& faceShader, Tokeniser& tokeniser ){
 	// parse the optional contents/flags/value
 	RETURN_FALSE_IF_FAIL( Tokeniser_getInteger( tokeniser, faceShader.m_flags.m_contentFlags ) );
@@ -460,6 +462,33 @@ public:
 };
 
 
+/*! rief Where the time inside reading a brush goes.
+
+    Reading brushes and building their faces is ~96% of a map parse, and it is
+    two jobs: constructing each Face, and tokenising the text to fill it in.
+    Reported after the parse; see referencecache.cpp.
+ */
+struct FaceReadStats
+{
+	double m_construct = 0;   // new Face, including its default shader capture
+	double m_read = 0;        // tokenising the plane, texdef and shader name
+	std::size_t m_faces = 0;
+
+	class Scope
+	{
+		double& m_total;
+		std::chrono::steady_clock::time_point m_begin;
+	public:
+		Scope( double& total ) : m_total( total ), m_begin( std::chrono::steady_clock::now() ){
+		}
+		~Scope(){
+			m_total += std::chrono::duration<double>( std::chrono::steady_clock::now() - m_begin ).count();
+		}
+	};
+};
+
+extern FaceReadStats g_faceReadStats;
+
 class BrushTokenImporter : public MapImporter
 {
 	Brush& m_brush;
@@ -483,12 +512,18 @@ public:
 
 			tokeniser.ungetToken();
 
-			m_brush.push_back( FaceSmartPointer( new Face( &m_brush ) ) );
+			{
+				FaceReadStats::Scope timer( g_faceReadStats.m_construct );
+				m_brush.push_back( FaceSmartPointer( new Face( &m_brush ) ) );
+			}
+			++g_faceReadStats.m_faces;
 
 			//!todo BP support
 			tokeniser.nextLine();
 
 			Face& face = *m_brush.back();
+
+			FaceReadStats::Scope readTimer( g_faceReadStats.m_read );
 
 			switch ( Brush::m_type )
 			{

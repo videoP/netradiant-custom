@@ -35,6 +35,7 @@
 #include "largemap.h"
 #include "staticbatch.h"
 #include "iselection.h"
+#include "scopetimer.h"
 
 #include "cullable.h"
 #include "chunkgrid.h"
@@ -257,7 +258,11 @@ public:
 
 		StaticBatch_invalidate();
 
-		Node_traverseSubgraph( root, InstanceSubgraphWalker( this, scene::Path(), 0 ) );
+		{
+			// creating a scene instance for every node, and filing it in the map
+			ScopeTimer timer( "  instancing" );
+			Node_traverseSubgraph( root, InstanceSubgraphWalker( this, scene::Path(), 0 ) );
+		}
 
 		m_rootpath.push( makeReference( root ) );
 
@@ -521,6 +526,7 @@ private:
 	}
 
 	void rebuildIndex(){
+		ScopeTimer timer( "  spatial index build" );
 		m_grids.clear();
 
 		InstanceMap::iterator i = m_instances.begin();

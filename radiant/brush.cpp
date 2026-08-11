@@ -20,6 +20,9 @@
  */
 
 #include "brush.h"
+#include "brushtokens.h"
+
+FaceReadStats g_faceReadStats;
 #include "signal/signal.h"
 
 Signal0 g_brushTextureChangedCallbacks;

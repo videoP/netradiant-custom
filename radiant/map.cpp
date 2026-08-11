@@ -372,7 +372,12 @@ scene::Node* Map_GetWorldspawn( const Map& map ){
 }
 
 void Map_SetWorldspawn( Map& map, scene::Node* node ){
-	map.m_world_node.set( node );
+	if ( map.m_world_node.get() != node ) {
+		map.m_world_node.set( node );
+		// batching takes worldspawn's brushes and nothing else, so what it
+		// collected before this point was collected against the wrong node
+		StaticBatch_invalidate();
+	}
 }
 
 
@@ -979,18 +984,7 @@ void DoMapInfo(){
 
 
 
-class ScopeTimer
-{
-	Timer m_timer;
-	const char* m_message;
-public:
-	ScopeTimer( const char* message )
-		: m_message( message ){
-	}
-	~ScopeTimer(){
-		globalOutputStream() << m_message << " timer: " << FloatFormat( m_timer.elapsed_sec(), 5, 2 ) << " second(s) elapsed\n";
-	}
-};
+#include "scopetimer.h"
 
 /*
    ================
