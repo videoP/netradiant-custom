@@ -51,6 +51,7 @@
 #include "editable.h"
 #include "mapfile.h"
 #include "staticbatch.h"
+#include "brushalloc.h"
 
 #include "math/frustum.h"
 #include "selectionlib.h"
@@ -332,7 +333,7 @@ public:
 		}
 	};
 
-	CopiedString m_shader;
+	const char* m_shader; // owned; see ShaderName_store()
 	Shader* m_state;
 	ContentsFlagsValue m_flags;
 	FaceShaderObserverPair m_observers;
@@ -340,7 +341,7 @@ public:
 	bool m_realised;
 
 	FaceShader( const char* shader, const ContentsFlagsValue& flags = ContentsFlagsValue( 0, 0, 0, false ) ) :
-		m_shader( shader ),
+		m_shader( ShaderName_store( shader ) ),
 		m_state( 0 ),
 		m_flags( flags ),
 		m_instanced( false ),
@@ -349,6 +350,7 @@ public:
 	}
 	~FaceShader(){
 		releaseShader();
+		ShaderName_release( m_shader );
 	}
 // copy-construction not supported
 	FaceShader( const FaceShader& other ) = delete;
@@ -364,14 +366,14 @@ public:
 
 	void captureShader(){
 		ASSERT_MESSAGE( m_state == 0, "shader cannot be captured" );
-		brush_check_shader( m_shader.c_str() );
-		m_state = GlobalShaderCache().capture( m_shader.c_str() );
+		brush_check_shader( m_shader );
+		m_state = GlobalShaderCache().capture( m_shader );
 		m_state->attach( *this );
 	}
 	void releaseShader(){
 		ASSERT_MESSAGE( m_state != 0, "shader cannot be released" );
 		m_state->detach( *this );
-		GlobalShaderCache().release( m_shader.c_str() );
+		GlobalShaderCache().release( m_shader );
 		m_state = 0;
 	}
 
@@ -401,14 +403,15 @@ public:
 	}
 
 	const char* getShader() const {
-		return m_shader.c_str();
+		return m_shader;
 	}
 	void setShader( const char* name ){
 		if ( m_instanced ) {
 			m_state->decrementUsed();
 		}
 		releaseShader();
-		m_shader = name;
+		ShaderName_release( m_shader );
+		m_shader = ShaderName_store( name );
 		captureShader();
 		if ( m_instanced ) {
 			m_state->incrementUsed();
@@ -1050,6 +1053,14 @@ public:
 		texdefChanged();
 		m_observer->shaderChanged();
 		updateFiltered();
+	}
+
+	// Faces are uniform and created in the millions; see brushalloc.h
+	static void* operator new( std::size_t size ){
+		return FaceStorage_allocate( size );
+	}
+	static void operator delete( void* face ){
+		FaceStorage_release( face );
 	}
 
 	void IncRef(){

@@ -47,4 +47,18 @@ extern LatchedBool g_largemap_staticBatch;
  */
 extern LatchedBool g_largemap_incrementalBounds;
 
+/*! \brief Share one copy of each shader name between the faces using it,
+    instead of every face holding its own.
+
+    A terrain map has hundreds of thousands of faces naming a handful of
+    shaders. See brushalloc.h.
+ */
+extern LatchedBool g_largemap_shareShaderNames;
+
+/*! \brief Hand Faces out of large blocks rather than allocating each one.
+
+    See brushalloc.h.
+ */
+extern LatchedBool g_largemap_poolFaces;
+
 void LargeMap_Construct();

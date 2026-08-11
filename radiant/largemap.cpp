@@ -13,6 +13,8 @@ LatchedBool g_largemap_deferEntityList( false, "Deferred Entity List population"
 LatchedBool g_largemap_spatialIndex( false, "Spatial index for view culling" );
 LatchedBool g_largemap_staticBatch( false, "Batched static geometry" );
 LatchedBool g_largemap_incrementalBounds( false, "Cached container bounds" );
+LatchedBool g_largemap_shareShaderNames( false, "Shared shader names" );
+LatchedBool g_largemap_poolFaces( false, "Pooled face allocation" );
 
 
 void LargeMap_constructPreferences( PreferencesPage& page ){
@@ -72,6 +74,29 @@ void LargeMap_constructPreferences( PreferencesPage& page ){
 	    "next time brushes are added or deleted, which costs a little culling\n"
 	    "accuracy and nothing else."
 	);
+	page.appendCheckBox(
+	    "Load", "Shared shader names",
+	    LatchedImportCaller( g_largemap_shareShaderNames ),
+	    BoolExportCaller( g_largemap_shareShaderNames.m_latched )
+	)->setToolTip(
+	    "Saves memory and load time on maps with many faces.\n\n"
+	    "Every face normally keeps its own copy of the name of the shader on it,\n"
+	    "even though a terrain map has hundreds of thousands of faces naming a\n"
+	    "handful of shaders. This keeps one copy of each name and shares it.\n\n"
+	    "On a 280k brush map that is roughly two million copies avoided."
+	);
+	page.appendCheckBox(
+	    "Load", "Pooled face allocation",
+	    LatchedImportCaller( g_largemap_poolFaces ),
+	    BoolExportCaller( g_largemap_poolFaces.m_latched )
+	)->setToolTip(
+	    "Speeds up loading and saves memory on maps with many brushes.\n\n"
+	    "Brush faces are all the same size and are created in enormous numbers,\n"
+	    "which is what a general-purpose allocator handles worst - each one\n"
+	    "carries its own bookkeeping. This hands them out of large blocks.\n\n"
+	    "Memory taken by faces is not returned to the system until you quit,\n"
+	    "which suits an editor, since the peak is reached when the map loads."
+	);
 	/* To read the effect of these: View / Show Stats. */
 }
 
@@ -94,6 +119,16 @@ void LargeMap_Construct(){
 	    "LargeMapSpatialIndex",
 	    makeBoolStringImportCallback( LatchedAssignCaller( g_largemap_spatialIndex ) ),
 	    BoolExportStringCaller( g_largemap_spatialIndex.m_latched )
+	);
+	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapShareShaderNames",
+	    makeBoolStringImportCallback( LatchedAssignCaller( g_largemap_shareShaderNames ) ),
+	    BoolExportStringCaller( g_largemap_shareShaderNames.m_latched )
+	);
+	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapPoolFaces",
+	    makeBoolStringImportCallback( LatchedAssignCaller( g_largemap_poolFaces ) ),
+	    BoolExportStringCaller( g_largemap_poolFaces.m_latched )
 	);
 	GlobalPreferenceSystem().registerPreference(
 	    "LargeMapIncrementalBounds",

@@ -880,6 +880,7 @@ $(INSTALLDIR)/radiant.$(EXE): \
 	radiant/brushnode.o \
 	radiant/brush.o \
 	radiant/brush_primit.o \
+	radiant/brushalloc.o \
 	radiant/brushtokens.o \
 	radiant/brushxml.o \
 	radiant/build.o \
