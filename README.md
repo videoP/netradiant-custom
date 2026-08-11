@@ -1,3 +1,5 @@
+This variant is focused on large .map support and water/terrain features.
+
 NetRadiant-custom
 =================
 
