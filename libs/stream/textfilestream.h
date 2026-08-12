@@ -22,7 +22,9 @@
 #pragma once
 
 #include "itextstream.h"
+#include "writestats.h"
 #include <cstdio>
+#include <cstring>
 
 /// \brief A wrapper around a file input stream opened for reading in text mode. Similar to std::ifstream.
 class TextFileInputStream : public TextInputStream
@@ -48,15 +50,41 @@ public:
 };
 
 /// \brief A wrapper around a file input stream opened for writing in text mode. Similar to std::ofstream.
+/*! \brief A file opened for writing text.
+
+    Buffered internally rather than leaning on stdio's: the map writer calls
+    write() once for the separator before every token and again for the token
+    itself, which on a 6.8M face map is upwards of 400 million calls, each
+    paying stdio's lock and - because the file is opened in text mode - a scan
+    for newlines to translate. Gathering them here first turns that into one
+    fwrite per 64 KB.
+ */
 class TextFileOutputStream : public TextOutputStream
 {
 	FILE* m_file;
+	static const std::size_t c_bufferSize = 64 * 1024;
+	char m_buffer[c_bufferSize];
+	std::size_t m_pos = 0;
+
+	void flush(){
+		if ( m_pos != 0 ) {
+			write_counted( m_buffer, m_pos );
+			m_pos = 0;
+		}
+	}
+	std::size_t write_counted( const char* buffer, std::size_t length ){
+		WriteTimerScope ioTime( g_writeStats.ioSeconds );
+		++g_writeStats.fwrites;
+		g_writeStats.bytes += length;
+		return fwrite( buffer, 1, length, m_file );
+	}
 public:
 	TextFileOutputStream( const char* name ){
 		m_file = name[0] == '\0' ? 0 : fopen( name, "wt" );
 	}
 	~TextFileOutputStream(){
 		if ( !failed() ) {
+			flush();
 			fclose( m_file );
 		}
 	}
@@ -66,7 +94,17 @@ public:
 	}
 
 	std::size_t write( const char* buffer, std::size_t length ) override {
-		return fwrite( buffer, 1, length, m_file );
+		++g_writeStats.writeCalls;
+		if ( length >= c_bufferSize ) { // too big to be worth gathering
+			flush();
+			return write_counted( buffer, length );
+		}
+		if ( m_pos + length > c_bufferSize ) {
+			flush();
+		}
+		std::memcpy( m_buffer + m_pos, buffer, length );
+		m_pos += length;
+		return length;
 	}
 };
 

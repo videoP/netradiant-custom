@@ -985,6 +985,7 @@ void DoMapInfo(){
 
 
 #include "scopetimer.h"
+#include "writestats.h"
 
 /*
    ================
@@ -1244,8 +1245,17 @@ void Map_Rename( const char* filename ){
 bool Map_Save(){
 	Pointfile_Clear();
 
+	g_writeStats = WriteStats();
+
 	ScopeTimer timer( "map save" );
 	SaveReferences();
+	globalOutputStream() << "  save detail: brep " << FloatFormat( g_writeStats.brepSeconds, 5, 2 )
+	                     << "s, export " << FloatFormat( g_writeStats.exportSeconds, 5, 2 )
+	                     << "s, io " << FloatFormat( g_writeStats.ioSeconds, 5, 2 )
+	                     << "s, over " << g_writeStats.brushes << " brushes\n";
+	globalOutputStream() << "  save io: " << g_writeStats.writeCalls << " writes, "
+	                     << g_writeStats.fwrites << " fwrites, "
+	                     << ( g_writeStats.bytes >> 20 ) << " MB\n";
 	return true; // assume success..
 }
 

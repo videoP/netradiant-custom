@@ -23,6 +23,7 @@
 
 #include "stringio.h"
 #include "stream/stringstream.h"
+#include "writestats.h"
 #include "brush.h"
 
 #include <chrono>
@@ -586,7 +587,12 @@ public:
 	BrushTokenExporter( const Brush& brush ) : m_brush( brush ){
 	}
 	void exportTokens( TokenWriter& writer ) const override {
-		m_brush.evaluateBRep(); // ensure b-rep is up-to-date, so that non-contributing faces can be identified.
+		WriteTimerScope exportTime( g_writeStats.exportSeconds );
+		++g_writeStats.brushes;
+		{
+			WriteTimerScope brepTime( g_writeStats.brepSeconds );
+			m_brush.evaluateBRep(); // ensure b-rep is up-to-date, so that non-contributing faces can be identified.
+		}
 
 		if ( !m_brush.hasContributingFaces() ) {
 			return;
