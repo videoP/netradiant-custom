@@ -1955,6 +1955,7 @@ inline bool verboseEntities;
 inline bool useCustomInfoParms;
 inline bool leaktest;
 inline bool nodetail;
+inline bool cullGrid;                   /* ydnar-era CullSides() is all-pairs; grid it for large maps */
 inline bool nosubdivide;
 inline bool notjunc;
 inline bool fulldetail;

@@ -114,6 +114,12 @@ int main( int argc, char **argv ){
 			numthreads = atoi( args.takeNext() );
 		}
 
+		/* grid the brush pairing in CullSides() */
+		while ( args.takeArg( "-cullgrid" ) ) {
+			cullGrid = true;
+			Sys_Printf( "Gridded brush pairing in CullSides enabled\n" );
+		}
+
 		/* max_map_draw_surfs */
 		while ( args.takeArg( "-maxmapdrawsurfs" ) ) {
 			max_map_draw_surfs = abs( atoi( args.takeNext() ) );

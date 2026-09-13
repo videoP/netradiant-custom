@@ -31,6 +31,12 @@
 /* dependencies */
 #include "q3map2.h"
 
+#include "timer.h"
+
+#include <cstdint>
+#include <cmath>
+#include <vector>
+
 
 
 /*
@@ -1190,169 +1196,382 @@ static bool SideInBrush( side_t& side, const brush_t& b ){
 
 
 /*
+   CullSidePair() - ydnar
+   the work CullSides() does for one pair of brushes
+
+   Order matters here: SideInBrush() both reads and writes side_t::culled, and
+   the coincident face test below asks which of the two is culled already. So
+   which face of a coincident pair survives depends on the order the brush pairs
+   are visited in, and both callers below visit them in the same order.
+ */
+
+static void CullSidePair( brush_t& b1, brush_t& b2 ){
+	int k, l, first, second, dir;
+
+	/* original check */
+	if ( b1.original == b2.original && b1.original != nullptr ) {
+		return;
+	}
+
+	/* bbox check */
+	if ( !b1.minmax.test( b2.minmax ) ) {
+		return;
+	}
+
+	/* cull inside sides */
+	for ( side_t& side : b1.sides )
+		SideInBrush( side, b2 );
+	for ( side_t& side : b2.sides )
+		SideInBrush( side, b1 );
+
+	/* side iterator 1 */
+	for ( side_t& side1 : b1.sides )
+	{
+		/* winding check */
+		winding_t& w1 = side1.winding;
+		if ( w1.empty() ) {
+			continue;
+		}
+		const int numPoints = w1.size();
+		if ( side1.shaderInfo == nullptr ) {
+			continue;
+		}
+
+		/* side iterator 2 */
+		for ( side_t& side2 : b2.sides )
+		{
+			/* winding check */
+			winding_t& w2 = side2.winding;
+			if ( w2.empty() ) {
+				continue;
+			}
+			if ( side2.shaderInfo == nullptr ) {
+				continue;
+			}
+			if ( w1.size() != w2.size() ) {
+				continue;
+			}
+			if ( side1.culled && side2.culled ) {
+				continue;
+			}
+
+			/* compare planes */
+			if ( ( side1.planenum & ~0x00000001 ) != ( side2.planenum & ~0x00000001 ) ) {
+				continue;
+			}
+
+			/* get autosprite and polygonoffset status */
+			if ( side1.shaderInfo->autosprite || side1.shaderInfo->polygonOffset ) {
+				continue;
+			}
+			if ( side2.shaderInfo->autosprite || side2.shaderInfo->polygonOffset ) {
+				continue;
+			}
+
+			/* find first common point */
+			first = -1;
+			for ( k = 0; k < numPoints; ++k )
+			{
+				if ( VectorCompare( w1[ 0 ], w2[ k ] ) ) {
+					first = k;
+					break;
+				}
+			}
+			if ( first == -1 ) {
+				continue;
+			}
+
+			/* find second common point (regardless of winding order) */
+			second = ( ( first + 1 ) < numPoints )? ( first + 1 ) : 0;
+			dir = 0;
+			if ( vector3_equal_epsilon( w1[ 1 ], w2[ second ], CULL_EPSILON ) ) {
+				dir = 1;
+			}
+			else
+			{
+				if ( first > 0 ) {
+					second = first - 1;
+				}
+				else{
+					second = numPoints - 1;
+				}
+				if ( vector3_equal_epsilon( w1[ 1 ], w2[ second ], CULL_EPSILON ) ) {
+					dir = -1;
+				}
+			}
+			if ( dir == 0 ) {
+				continue;
+			}
+
+			/* compare the rest of the points */
+			l = first;
+			for ( k = 0; k < numPoints; ++k )
+			{
+				if ( !vector3_equal_epsilon( w1[ k ], w2[ l ], CULL_EPSILON ) ) {
+					k = 100000;
+				}
+
+				l += dir;
+				if ( l < 0 ) {
+					l = numPoints - 1;
+				}
+				else if ( l >= numPoints ) {
+					l = 0;
+				}
+			}
+			if ( k >= 100000 ) {
+				continue;
+			}
+
+			/* cull face 1 */
+			if ( !side2.culled && !( side2.compileFlags & C_TRANSLUCENT ) && !( side2.compileFlags & C_NODRAW ) ) {
+				side1.culled = true;
+				g_numCoinFaces++;
+			}
+
+			if ( side1.planenum == side2.planenum && side1.culled ) {
+				continue;
+			}
+
+			/* cull face 2 */
+			if ( !side1.culled && !( side1.compileFlags & C_TRANSLUCENT ) && !( side1.compileFlags & C_NODRAW ) ) {
+				side2.culled = true;
+				g_numCoinFaces++;
+			}
+
+			// TODO ? this culls only one of face-to-face windings; SideInBrush culls both tho; is this needed at all or should be improved?
+		}
+	}
+}
+
+
+/*
+   CullSidesGrid() - the brush pairing of CullSides(), through a uniform grid
+
+   The stock loop tests every brush against every other one. That is fine for a
+   few thousand brushes and hopeless for a few hundred thousand: the bbox
+   rejection it leans on is itself the thing being done n^2/2 times, walking a
+   std::list, so nearly all of it is cache misses proving that brushes at
+   opposite ends of the map do not touch.
+
+   Brushes can only cull each other if their bounds touch, so this files them
+   into a grid and pairs up only brushes that share a cell. It produces exactly
+   the pairs the stock loop produces, in exactly the same order, so the two
+   differ in speed and in nothing else - see CullSidePair().
+ */
+
+#define CULLGRID_MAX_CELLS_PER_BRUSH    64      /* past this a brush is held aside instead of filed into every cell it covers */
+#define CULLGRID_MAX_QUERY_CELLS        4096    /* past this it is cheaper to walk the brush array than the brush's own cells */
+
+static void CullSidesGrid( entity_t& e ){
+	/* the stock loop skips sideless brushes as both b1 and b2, so leave them out
+	   altogether; likewise a brush whose bounds were never set, which could never
+	   pass the bbox test against anything. note that a zero thickness brush has
+	   perfectly good bounds, so this is not MinMax::valid() */
+	std::vector<brush_t*> brushes;
+	for ( brush_t& b : e.brushes )
+	{
+		if ( !b.sides.empty()
+		  && b.minmax.mins.x() <= b.minmax.maxs.x()
+		  && b.minmax.mins.y() <= b.minmax.maxs.y()
+		  && b.minmax.mins.z() <= b.minmax.maxs.z() ) {
+			brushes.push_back( &b );
+		}
+	}
+
+	const uint32_t numBrushes = brushes.size();
+	if ( numBrushes < 2 ) {
+		return;
+	}
+
+	/* map bounds, and the mean brush size: cells smaller than a brush only mean
+	   that every brush lands in a great many of them */
+	MinMax world;
+	double meanExtent = 0;
+	for ( const brush_t *b : brushes )
+	{
+		world.extend( b->minmax );
+		const Vector3 size = b->minmax.maxs - b->minmax.mins;
+		meanExtent += std::max( { size[0], size[1], size[2] } );
+	}
+	meanExtent /= numBrushes;
+
+	const Vector3 worldSize = world.maxs - world.mins;
+
+	/* aim for roughly a brush a cell, but never finer than a brush */
+	double volume = 1;
+	for ( int i = 0; i < 3; ++i )
+		volume *= std::max( static_cast<double>( worldSize[i] ), 1.0 );
+
+	double cellSize = std::max( { meanExtent, std::cbrt( volume / numBrushes ), 1.0 } );
+
+	/* and keep the cell array itself in proportion to the map */
+	const size_t maxCells = std::min<size_t>( 4u << 20, std::max<size_t>( static_cast<size_t>( numBrushes ) * 2, 1024 ) );
+	int dims[ 3 ];
+	size_t numCells;
+	for ( ;; )
+	{
+		numCells = 1;
+		for ( int i = 0; i < 3; ++i )
+		{
+			dims[i] = std::clamp( static_cast<int>( worldSize[i] / cellSize ) + 1, 1, 2048 );
+			numCells *= dims[i];
+		}
+		if ( numCells <= maxCells ) {
+			break;
+		}
+		cellSize *= 2;
+	}
+
+	/* the inclusive cell range a brush covers, and how many cells that comes to */
+	const auto cellRange = [&]( const MinMax& minmax, int lo[3], int hi[3] ){
+		size_t span = 1;
+		for ( int i = 0; i < 3; ++i )
+		{
+			lo[i] = std::clamp( static_cast<int>( ( minmax.mins[i] - world.mins[i] ) / cellSize ), 0, dims[i] - 1 );
+			hi[i] = std::clamp( static_cast<int>( ( minmax.maxs[i] - world.mins[i] ) / cellSize ), 0, dims[i] - 1 );
+			span *= hi[i] - lo[i] + 1;
+		}
+		return span;
+	};
+
+	const auto cellIndex = [&]( int x, int y, int z ){
+		return ( static_cast<size_t>( z ) * dims[1] + y ) * dims[0] + x;
+	};
+
+	/* file the brushes into the cells, counting first, so the whole thing is two
+	   flat arrays rather than a container per cell */
+	std::vector<uint32_t> cellStart( numCells + 1, 0 );
+	std::vector<uint32_t> sprawling;    /* brushes covering too much of the map to file */
+	int lo[ 3 ], hi[ 3 ];
+
+	for ( uint32_t i = 0; i < numBrushes; ++i )
+	{
+		if ( cellRange( brushes[i]->minmax, lo, hi ) > CULLGRID_MAX_CELLS_PER_BRUSH ) {
+			sprawling.push_back( i );
+			continue;
+		}
+		for ( int z = lo[2]; z <= hi[2]; ++z )
+			for ( int y = lo[1]; y <= hi[1]; ++y )
+				for ( int x = lo[0]; x <= hi[0]; ++x )
+					++cellStart[ cellIndex( x, y, z ) + 1 ];
+	}
+
+	for ( size_t i = 1; i <= numCells; ++i )
+		cellStart[i] += cellStart[i - 1];
+
+	std::vector<uint32_t> cellBrushes( cellStart[ numCells ] );
+	{
+		std::vector<uint32_t> cursor( cellStart.cbegin(), cellStart.cend() - 1 );
+		for ( uint32_t i = 0; i < numBrushes; ++i )
+		{
+			if ( cellRange( brushes[i]->minmax, lo, hi ) > CULLGRID_MAX_CELLS_PER_BRUSH ) {
+				continue;
+			}
+			for ( int z = lo[2]; z <= hi[2]; ++z )
+				for ( int y = lo[1]; y <= hi[1]; ++y )
+					for ( int x = lo[0]; x <= hi[0]; ++x )
+						cellBrushes[ cursor[ cellIndex( x, y, z ) ]++ ] = i;
+		}
+	}
+
+	/* pair them up */
+	std::vector<uint32_t> stamp( numBrushes, UINT32_MAX );  /* which brush a partner was last gathered for, so it is gathered once */
+	std::vector<uint32_t> partners;
+	size_t c_pairs = 0;
+
+	for ( uint32_t i = 0; i < numBrushes; ++i )
+	{
+		brush_t& b1 = *brushes[i];
+		partners.clear();
+
+		if ( cellRange( b1.minmax, lo, hi ) > CULLGRID_MAX_QUERY_CELLS ) {
+			/* covers most of the map: cheaper to take the lot, which is what the
+			   stock loop does for it in any case */
+			for ( uint32_t j = i + 1; j < numBrushes; ++j )
+				partners.push_back( j );
+		}
+		else
+		{
+			for ( int z = lo[2]; z <= hi[2]; ++z )
+				for ( int y = lo[1]; y <= hi[1]; ++y )
+					for ( int x = lo[0]; x <= hi[0]; ++x )
+					{
+						const size_t cell = cellIndex( x, y, z );
+						for ( uint32_t k = cellStart[ cell ]; k < cellStart[ cell + 1 ]; ++k )
+						{
+							const uint32_t j = cellBrushes[ k ];
+							if ( j > i && stamp[ j ] != i ) {
+								stamp[ j ] = i;
+								partners.push_back( j );
+							}
+						}
+					}
+
+			/* the sprawling ones are in no cell, so they are everyone's partner */
+			for ( const uint32_t j : sprawling )
+			{
+				if ( j > i && stamp[ j ] != i ) {
+					stamp[ j ] = i;
+					partners.push_back( j );
+				}
+			}
+
+			/* the stock loop takes them in brush list order and the outcome
+			   depends on that order, so put them back into it */
+			std::sort( partners.begin(), partners.end() );
+		}
+
+		c_pairs += partners.size();
+		for ( const uint32_t j : partners )
+			CullSidePair( b1, *brushes[j] );
+	}
+
+	Sys_FPrintf( SYS_VRB, "%9u brushes in a %dx%dx%d grid of %.0f units\n",
+	             numBrushes, dims[0], dims[1], dims[2], cellSize );
+	if ( !sprawling.empty() ) {
+		Sys_FPrintf( SYS_VRB, "%9zu brushes too large to file\n", sprawling.size() );
+	}
+	Sys_FPrintf( SYS_VRB, "%9zu brush pairs tested, of %zu\n",
+	             c_pairs, static_cast<size_t>( numBrushes ) * ( numBrushes - 1 ) / 2 );
+}
+
+
+/*
    CullSides() - ydnar
    culls obscured or buried brushsides from the map
  */
 
 static void CullSides( entity_t& e ){
-	int k, l, first, second, dir;
-
-
 	/* note it */
 	Sys_FPrintf( SYS_VRB, "--- CullSides ---\n" );
 
 	g_numHiddenFaces = 0;
 	g_numCoinFaces = 0;
+	Timer timer;
 
-	/* brush interator 1 */
-	for ( brushlist_t::iterator b1 = e.brushes.begin(); b1 != e.brushes.end(); ++b1 )
+	if ( cullGrid ) {
+		CullSidesGrid( e );
+	}
+	else
 	{
-		/* sides check */
-		if ( b1->sides.empty() ) {
-			continue;
-		}
-
-		/* brush iterator 2 */
-		for ( brushlist_t::iterator b2 = std::next( b1 ); b2 != e.brushes.end(); ++b2 )
+		/* brush interator 1 */
+		for ( brushlist_t::iterator b1 = e.brushes.begin(); b1 != e.brushes.end(); ++b1 )
 		{
 			/* sides check */
-			if ( b2->sides.empty() ) {
+			if ( b1->sides.empty() ) {
 				continue;
 			}
 
-			/* original check */
-			if ( b1->original == b2->original && b1->original != nullptr ) {
-				continue;
-			}
-
-			/* bbox check */
-			if ( !b1->minmax.test( b2->minmax ) ) {
-				continue;
-			}
-
-			/* cull inside sides */
-			for ( side_t& side : b1->sides )
-				SideInBrush( side, *b2 );
-			for ( side_t& side : b2->sides )
-				SideInBrush( side, *b1 );
-
-			/* side iterator 1 */
-			for ( side_t& side1 : b1->sides )
+			/* brush iterator 2 */
+			for ( brushlist_t::iterator b2 = std::next( b1 ); b2 != e.brushes.end(); ++b2 )
 			{
-				/* winding check */
-				winding_t& w1 = side1.winding;
-				if ( w1.empty() ) {
-					continue;
-				}
-				const int numPoints = w1.size();
-				if ( side1.shaderInfo == nullptr ) {
+				/* sides check */
+				if ( b2->sides.empty() ) {
 					continue;
 				}
 
-				/* side iterator 2 */
-				for ( side_t& side2 : b2->sides )
-				{
-					/* winding check */
-					winding_t& w2 = side2.winding;
-					if ( w2.empty() ) {
-						continue;
-					}
-					if ( side2.shaderInfo == nullptr ) {
-						continue;
-					}
-					if ( w1.size() != w2.size() ) {
-						continue;
-					}
-					if ( side1.culled && side2.culled ) {
-						continue;
-					}
-
-					/* compare planes */
-					if ( ( side1.planenum & ~0x00000001 ) != ( side2.planenum & ~0x00000001 ) ) {
-						continue;
-					}
-
-					/* get autosprite and polygonoffset status */
-					if ( side1.shaderInfo->autosprite || side1.shaderInfo->polygonOffset ) {
-						continue;
-					}
-					if ( side2.shaderInfo->autosprite || side2.shaderInfo->polygonOffset ) {
-						continue;
-					}
-
-					/* find first common point */
-					first = -1;
-					for ( k = 0; k < numPoints; ++k )
-					{
-						if ( VectorCompare( w1[ 0 ], w2[ k ] ) ) {
-							first = k;
-							break;
-						}
-					}
-					if ( first == -1 ) {
-						continue;
-					}
-
-					/* find second common point (regardless of winding order) */
-					second = ( ( first + 1 ) < numPoints )? ( first + 1 ) : 0;
-					dir = 0;
-					if ( vector3_equal_epsilon( w1[ 1 ], w2[ second ], CULL_EPSILON ) ) {
-						dir = 1;
-					}
-					else
-					{
-						if ( first > 0 ) {
-							second = first - 1;
-						}
-						else{
-							second = numPoints - 1;
-						}
-						if ( vector3_equal_epsilon( w1[ 1 ], w2[ second ], CULL_EPSILON ) ) {
-							dir = -1;
-						}
-					}
-					if ( dir == 0 ) {
-						continue;
-					}
-
-					/* compare the rest of the points */
-					l = first;
-					for ( k = 0; k < numPoints; ++k )
-					{
-						if ( !vector3_equal_epsilon( w1[ k ], w2[ l ], CULL_EPSILON ) ) {
-							k = 100000;
-						}
-
-						l += dir;
-						if ( l < 0 ) {
-							l = numPoints - 1;
-						}
-						else if ( l >= numPoints ) {
-							l = 0;
-						}
-					}
-					if ( k >= 100000 ) {
-						continue;
-					}
-
-					/* cull face 1 */
-					if ( !side2.culled && !( side2.compileFlags & C_TRANSLUCENT ) && !( side2.compileFlags & C_NODRAW ) ) {
-						side1.culled = true;
-						g_numCoinFaces++;
-					}
-
-					if ( side1.planenum == side2.planenum && side1.culled ) {
-						continue;
-					}
-
-					/* cull face 2 */
-					if ( !side1.culled && !( side1.compileFlags & C_TRANSLUCENT ) && !( side1.compileFlags & C_NODRAW ) ) {
-						side2.culled = true;
-						g_numCoinFaces++;
-					}
-
-					// TODO ? this culls only one of face-to-face windings; SideInBrush culls both tho; is this needed at all or should be improved?
-				}
+				CullSidePair( *b1, *b2 );
 			}
 		}
 	}
@@ -1360,6 +1579,7 @@ static void CullSides( entity_t& e ){
 	/* emit some stats */
 	Sys_FPrintf( SYS_VRB, "%9d hidden faces culled\n", g_numHiddenFaces );
 	Sys_FPrintf( SYS_VRB, "%9d coincident faces culled\n", g_numCoinFaces );
+	Sys_FPrintf( SYS_VRB, "%9.1f seconds elapsed\n", timer.elapsed_sec() );
 }
 
 
