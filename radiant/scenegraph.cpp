@@ -33,10 +33,18 @@
 #include "layers.h"
 #include "entitylist.h"
 #include "largemap.h"
+#include "staticbatch.h"
 
 #include "cullable.h"
+#include "chunkgrid.h"
 #include "math/frustum.h"
 #include "math/aabb.h"
+
+/* Per-frame diagnostics, shown by View / Show Stats. Defined in renderstate.cpp
+   alongside the other counters, and reset with them. */
+extern std::size_t g_count_instances;      // instances handed to the view walker
+extern std::size_t g_count_cells_batched;  // instances skipped because their cell is batched
+extern bool g_index_used;                  // false when the traversal fell back to the full walk
 
 #include <unordered_map>
 #include <vector>
@@ -67,22 +75,10 @@ class InstanceGrid
 
 	std::unordered_map<std::uint64_t, Cell> m_cells;
 
-	static const double c_cellSize;
-	static const std::int64_t c_cellMask = 0x1fffff; // 21 bits per axis
-
-	static std::uint64_t cellKey( const Vector3& point ){
-		const auto coord = []( double v ){
-			return static_cast<std::int64_t>( std::floor( v / c_cellSize ) ) & c_cellMask;
-		};
-		return static_cast<std::uint64_t>( coord( point.x() ) )
-		     | ( static_cast<std::uint64_t>( coord( point.y() ) ) << 21 )
-		     | ( static_cast<std::uint64_t>( coord( point.z() ) ) << 42 );
-	}
-
 public:
 	void insert( scene::Instance* instance ){
 		const AABB& aabb = instance->worldAABB();
-		Cell& cell = m_cells[ cellKey( aabb.origin ) ];
+		Cell& cell = m_cells[ chunk_key( aabb.origin ) ];
 		aabb_extend_by_aabb_safe( cell.bounds, aabb ); // handles a still-invalid cell AABB
 		cell.instances.push_back( instance );
 	}
@@ -97,17 +93,23 @@ public:
 			if ( volume.TestAABB( cell.bounds ) == c_volumeOutside ) {
 				continue;
 			}
+			/* Everything here is already drawn as one batch, so walking it
+			   would spend a per-instance cull, state push/pop and virtual call
+			   each, only for the instance to decline to draw. */
+			if ( StaticBatch_cellCovered( key, cell.instances.size() ) ) {
+				g_count_cells_batched += cell.instances.size();
+				continue;
+			}
 			for ( scene::Instance* instance : cell.instances )
 			{
 				// gridded instances are leaves, so pre()'s return value has nothing to prune
+				++g_count_instances;
 				walker.pre( instance->path(), *instance );
 				walker.post( instance->path(), *instance );
 			}
 		}
 	}
 };
-
-const double InstanceGrid::c_cellSize = 1024.0;
 
 /// \brief Minimum sibling leaf count before a grid is worth building for a parent.
 const std::size_t c_minChildrenForGrid = 1024;
@@ -185,6 +187,8 @@ public:
 			graph_tree_model_suspend( g_tree_model );
 		}
 
+		StaticBatch_invalidate();
+
 		Node_traverseSubgraph( root, InstanceSubgraphWalker( this, scene::Path(), 0 ) );
 
 		m_rootpath.push( makeReference( root ) );
@@ -203,6 +207,8 @@ public:
 		scene::Node& root = m_rootpath.top();
 
 		m_rootpath.pop();
+
+		StaticBatch_invalidate(); // drops every brush pointer before the instances go
 
 		/* likewise: erasing one at a time is O(n^2) */
 		if ( g_largemap_deferEntityList.m_value ) {
@@ -230,6 +236,8 @@ public:
 	/* --- spatial index (see largemap.h) --- */
 
 	void traverse_visible( const Walker& walker, const VolumeTest& volume ){
+		g_index_used = false;
+
 		if ( !g_largemap_spatialIndex.m_value || m_instances.empty() ) {
 			traverse( walker );
 			return;
@@ -251,6 +259,8 @@ public:
 		else if ( m_indexRebuildPending ) {
 			rebuildIndex();
 		}
+
+		g_index_used = true;
 
 		InstanceMap::iterator i = m_instances.begin();
 		while ( i != m_instances.end() )
@@ -304,6 +314,7 @@ public:
 private:
 
 	bool pre( const Walker& walker, const InstanceMap::iterator& i ){
+		++g_count_instances;
 		return walker.pre( i->first, *i->second );
 	}
 
@@ -323,6 +334,7 @@ private:
 		const std::size_t depth = self->first.get().size();
 		++i;
 
+		++g_count_instances;
 		if ( walker.pre( self->first, *self->second ) ) {
 			const auto grid = m_grids.find( self->second );
 			if ( grid != m_grids.end() ) {

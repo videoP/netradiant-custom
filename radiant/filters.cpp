@@ -34,6 +34,7 @@
 #include "gtkmisc.h"
 #include "commands.h"
 #include "preferences.h"
+#include "staticbatch.h"
 
 struct filters_globals_t
 {
@@ -75,6 +76,8 @@ void UpdateFilters(){
 	{
 		filterable->updateFiltered();
 	}
+
+	StaticBatch_invalidate(); // batches are built from unfiltered faces only
 }
 
 

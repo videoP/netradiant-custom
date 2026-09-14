@@ -956,6 +956,23 @@ public:
 
 	Timer m_render_time;
 
+	/* Frame rate, averaged over a fixed window. A single frame-to-frame delta
+	   jitters far too much to compare two builds by eye. */
+	double m_fps_accum = 0;
+	std::size_t m_fps_frames = 0;
+	char m_fps_text[64] = "fps: --";
+
+	void updateFrameRate( double elapsed_sec ){
+		m_fps_accum += elapsed_sec;
+		++m_fps_frames;
+		if ( m_fps_accum >= 0.5 ) {
+			snprintf( m_fps_text, sizeof( m_fps_text ), "fps: %.1f | frame: %.2f ms",
+			          m_fps_frames / m_fps_accum, 1000.0 * m_fps_accum / m_fps_frames );
+			m_fps_accum = 0;
+			m_fps_frames = 0;
+		}
+	}
+
 	CamWnd();
 	~CamWnd();
 
@@ -2100,12 +2117,18 @@ void CamWnd::Cam_Draw(){
 	}
 
 	if ( g_camwindow_globals.m_showStats ) {
+		const float lineHeight = GlobalOpenGL().m_font->getPixelHeight();
+
+		updateFrameRate( m_render_time.elapsed_sec() );
 		gl().glRasterPos3f( 1, m_Camera.height, 0 );
+		GlobalOpenGL().drawString( m_fps_text );
+
+		gl().glRasterPos3f( 1, m_Camera.height - lineHeight, 0 );
 		extern const char* Renderer_GetStats( int frame2frame );
 		GlobalOpenGL().drawString( Renderer_GetStats( m_render_time.elapsed_msec() ) );
 		m_render_time.start();
 
-		gl().glRasterPos3f( 1, m_Camera.height - GlobalOpenGL().m_font->getPixelHeight(), 0 );
+		gl().glRasterPos3f( 1, m_Camera.height - lineHeight * 2, 0 );
 		extern const char* Cull_GetStats();
 		GlobalOpenGL().drawString( Cull_GetStats() );
 	}
@@ -2291,6 +2314,7 @@ void CamWnd_SetMode( camera_draw_mode mode ){
 	camera_t::draw_mode = ( g_camwnd == 0 && mode == cd_lighting )? cd_texture : mode;
 
 	ShaderCache_setBumpEnabled( camera_t::draw_mode == cd_lighting );
+	StaticBatch_setSolidSupported( camera_t::draw_mode != cd_lighting && camera_t::draw_mode != cd_wire );
 	if ( g_camwnd != 0 ) {
 		CamWnd_Update( *g_camwnd );
 	}

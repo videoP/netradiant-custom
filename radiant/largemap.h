@@ -29,4 +29,12 @@ extern LatchedBool g_largemap_deferEntityList;
  */
 extern LatchedBool g_largemap_spatialIndex;
 
+/*! \brief Batch static worldspawn geometry into per-chunk vertex buffers for the
+    camera's solid pass.
+
+    Stock behaviour issues one glDrawArrays over 3-4 client-side vertices per
+    face per frame. Batching turns that into one draw call per chunk per shader.
+ */
+extern LatchedBool g_largemap_staticBatch;
+
 void LargeMap_Construct();

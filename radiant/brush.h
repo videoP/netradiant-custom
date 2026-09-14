@@ -50,6 +50,7 @@
 #include "selectable.h"
 #include "editable.h"
 #include "mapfile.h"
+#include "staticbatch.h"
 
 #include "math/frustum.h"
 #include "selectionlib.h"
@@ -1710,6 +1711,18 @@ public:
 		}
 	}
 
+	/* Read-only views of the cached b-rep data, so static batching can gather
+	   brush outlines without duplicating the edge extraction. */
+	const Array<DepthTestedPointVertex>& getUniqueVertexPoints() const {
+		return m_uniqueVertexPoints;
+	}
+	const Array<EdgeRenderIndices>& getEdgeIndices() const {
+		return m_edge_indices;
+	}
+	const Array<EdgeFaces>& getEdgeFaces() const {
+		return m_edge_faces;
+	}
+
 	void forEachFace_instanceAttach( MapFile* map ) const {
 		for ( const auto& face : m_faces )
 		{
@@ -3360,6 +3373,12 @@ class BrushInstance :
 
 	BrushTransformModifier m_transform;
 public:
+	/* Static batching (see staticbatch.h). m_staticBatched means this brush's
+	   faces are already in its chunk's vertex buffer, so it must not submit
+	   them itself while that batch is being drawn. */
+	mutable bool m_staticBatched = false;
+	std::uint64_t m_staticBatchChunk = c_staticBatchNoChunk;
+
 	static Counter* m_counter;
 
 	typedef LazyStatic<TypeCasts> StaticTypeCasts;
@@ -3392,6 +3411,8 @@ public:
 		Instance::setTransformChangedCallback( LightsChangedCaller( *this ) );
 	}
 	~BrushInstance(){
+		StaticBatch_brushRemoved( *this );
+
 		Instance::setTransformChangedCallback( Callback<void()>() );
 
 		m_brush.m_lightsChanged = Callback<void()>();
@@ -3422,6 +3443,8 @@ public:
 	void selectedChanged( const Selectable& selectable ){
 		GlobalSelectionSystem().getObserver ( SelectionSystem::ePrimitive )( selectable );
 		GlobalSelectionSystem().onSelectedChanged( *this, selectable );
+
+		StaticBatch_brushChanged( *this ); // a selected brush draws highlighted, so it leaves its batch
 
 		Instance::selectedChanged();
 	}
@@ -3467,6 +3490,8 @@ public:
 		m_faceInstances.erase( m_faceInstances.begin() + index );
 	}
 	void connectivityChanged() override {
+		StaticBatch_brushChanged( *this ); // geometry changed under the batch
+
 		for ( auto& fi : m_faceInstances )
 		{
 			fi.connectivityChanged();
@@ -3638,6 +3663,10 @@ public:
 	}
 
 	void renderSolid( Renderer& renderer, const VolumeTest& volume ) const override {
+		if ( m_staticBatched && StaticBatch_active() ) {
+			return; // already drawn as part of this view's batched geometry
+		}
+
 		m_brush.evaluateBRep();
 
 		renderClipPlane( renderer, volume );
@@ -3646,6 +3675,10 @@ public:
 	}
 
 	void renderWireframe( Renderer& renderer, const VolumeTest& volume ) const override {
+		if ( m_staticBatched && StaticBatch_active() ) {
+			return; // already drawn as part of this view's batched outlines
+		}
+
 		m_brush.evaluateBRep();
 
 		renderClipPlane( renderer, volume );

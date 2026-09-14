@@ -96,6 +96,14 @@ std::size_t g_count_states;
 std::size_t g_count_transforms;
 Timer g_timer;
 
+/* Large-map diagnostics, written by scenegraph.cpp. "walked" is the number of
+   instances handed to the view walker, which is the cost batching does not
+   remove on its own; "batched" is how many were skipped because their whole
+   cell is already drawn. */
+std::size_t g_count_instances;
+std::size_t g_count_cells_batched;
+bool g_index_used;
+
 inline void count_prim(){
 	++g_count_prims;
 }
@@ -112,6 +120,8 @@ void Renderer_ResetStats(){
 	g_count_prims = 0;
 	g_count_states = 0;
 	g_count_transforms = 0;
+	g_count_instances = 0;
+	g_count_cells_batched = 0;
 	g_timer.start();
 }
 
@@ -120,6 +130,9 @@ const char* Renderer_GetStats( int frame2frame ){
 		"prims: ", g_count_prims,
 		" | states: ", g_count_states,
 		" | transforms: ", g_count_transforms,
+		" | walked: ", g_count_instances,
+		" | batched: ", g_count_cells_batched,
+		" | idx: ", g_index_used ? "grid" : "full",
 		" | msec: ", g_timer.elapsed_msec(),
 		" | f2f: ", frame2frame
 	);

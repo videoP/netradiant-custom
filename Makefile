@@ -948,6 +948,7 @@ $(INSTALLDIR)/radiant.$(EXE): \
 	radiant/selection_mtor_translate.o \
 	radiant/selection_mtor_uv.o \
 	radiant/select.o \
+	radiant/staticbatch.o \
 	radiant/server.o \
 	radiant/sockets.o \
 	radiant/stacktrace.o \
