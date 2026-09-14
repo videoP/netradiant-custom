@@ -13,6 +13,10 @@
 /// rief Mirror of g_largemap_lazyComponents; see the comment in brush.h.
 extern bool g_brush_lazyComponents;
 
+/// \brief Bytes the face pool has taken from the system, block rounding and all.
+/// Exact, unlike sizeof( Face ) x faces, which misses the tail of each block.
+std::size_t FaceStorage_reservedBytes();
+
 /*! \brief Takes ownership of a copy of \p name for a face to hold.
 
     Shader names repeat enormously - a terrain map has hundreds of thousands of

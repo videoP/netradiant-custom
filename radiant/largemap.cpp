@@ -6,6 +6,8 @@
 
 #include "stringio.h"
 #include "preferencesystem.h"
+#include "itextstream.h"
+#include "stream/stringstream.h"
 #include "script/scripttokeniser.h" // g_scriptTokeniser_fastPath
 #include "brushalloc.h"             // g_brush_lazyComponents
 
@@ -237,4 +239,46 @@ void LargeMap_Construct(){
 	g_brush_lazyComponents = g_largemap_lazyComponents.m_value;
 
 	LargeMap_registerPreferencesPage();
+}
+
+
+/*! \brief Says which options the running session is actually using.
+
+    They are latched, so what is ticked in Settings and what the session is
+    running with differ until a restart - and a measurement taken without
+    knowing which were in force cannot be compared against anything. A frame
+    that spends all its time recomputing container bounds looks the same
+    whether the cache is switched off or is being invalidated every frame;
+    this removes half of that question for nothing.
+ */
+void LargeMap_reportActive(){
+	const LatchedBool* const options[] = {
+		&g_largemap_deferEntityList,
+		&g_largemap_spatialIndex,
+		&g_largemap_staticBatch,
+		&g_largemap_incrementalBounds,
+		&g_largemap_shareShaderNames,
+		&g_largemap_poolFaces,
+		&g_largemap_fastParse,
+		&g_largemap_lazyComponents,
+	};
+
+	StringOutputStream active( 256 );
+	std::size_t count = 0;
+	for ( const LatchedBool* option : options )
+	{
+		if ( option->m_value ) {
+			active << ( count++ == 0 ? "" : ", " ) << option->m_description;
+		}
+	}
+
+	globalOutputStream() << "large map options: " << ( count == 0 ? "none" : active.c_str() ) << '\n';
+
+	for ( const LatchedBool* option : options )
+	{
+		if ( option->m_value != option->m_latched ) {
+			globalOutputStream() << "  note: " << option->m_description
+			                     << " is ticked in Settings but needs a restart to take effect\n";
+		}
+	}
 }

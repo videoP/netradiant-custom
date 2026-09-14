@@ -10,6 +10,8 @@
 #include "chunkgrid.h"
 #include "scopetimer.h"
 #include "framestats.h"
+#include "memreport.h"
+#include "brushmemory.h"
 
 #include "ientity.h"
 #include "ieclass.h"
@@ -627,6 +629,15 @@ void StaticBatchCache::build(){
 
 	globalOutputStream() << "static batches: " << Unsigned( m_chunks.size() ) << " chunks, "
 	                     << Unsigned( ranges ) << " draw calls for the whole map\n";
+
+	/* The report taken at the end of the load runs before any of this, and a
+	   brush's b-rep - its windings and the arrays derived from them - is built
+	   lazily, on first evaluation. Chunk::build() has just forced that for
+	   every brush in the map, so this is the first point at which the figures
+	   are complete. */
+	MemoryUse_report( "realised" );
+	VirtualMemory_report( "realised" );
+	BrushMemory_report();
 	if ( g_reject_aabb != 0 ) {
 		globalOutputStream() << "  " << Unsigned( g_reject_aabb )
 		                     << " brushes have no valid bounds, so nothing draws them at all"

@@ -985,6 +985,9 @@ void DoMapInfo(){
 
 
 #include "scopetimer.h"
+#include "memreport.h"
+#include "brushmemory.h"
+#include "largemap.h"
 #include "writestats.h"
 
 /*
@@ -1011,6 +1014,15 @@ void Map_LoadFile( const char *filename ){
 
 	globalOutputStream() << g_brushCount.get() + g_patchCount.get() << " primitives\n";
 	globalOutputStream() << g_entityCount.get() << " entities\n";
+
+	/* Load the same map with the Large Maps options off and on and diff these.
+	   The per-brush figures were arithmetic before this, never measured.
+	   Which options were in force is printed alongside, so the two numbers
+	   being diffed can be told apart afterwards. */
+	LargeMap_reportActive();
+	MemoryUse_report( "map" );
+	VirtualMemory_report( "map" );
+	BrushMemory_report();
 
 	//GlobalEntityCreator().printStatistics();
 

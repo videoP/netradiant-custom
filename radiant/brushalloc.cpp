@@ -109,6 +109,10 @@ void* FaceStorage_allocate( std::size_t size ){
 	return static_cast<char*>( g_block ) + g_slotSize * g_slotsUsed++;
 }
 
+std::size_t FaceStorage_reservedBytes(){
+	return g_blocks.size() * g_slotSize * c_facesPerBlock;
+}
+
 void FaceStorage_release( void* face ){
 	if ( face == nullptr ) {
 		return;

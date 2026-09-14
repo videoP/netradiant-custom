@@ -45,6 +45,7 @@
 #include "container/cache.h"
 #include "largemap.h"
 #include "framestats.h"
+#include "memreport.h"
 #include "generic/reference.h"
 #include "moduleobservers.h"
 #include "stream/filestream.h"
@@ -152,6 +153,24 @@ inline int msec_of( double seconds ){
 	return static_cast<int>( seconds * 1000.0 + 0.5 );
 }
 
+/*! \brief Committed memory, refreshed a few times a second.
+
+    GetProcessMemoryInfo is a system call and the number does not move fast
+    enough to be worth one per frame per view. Committed rather than resident:
+    Windows trims the working set on a whim - two loads of the same map
+    measured 2 GB apart resident with identical committed - so resident says
+    nothing stable about what a map costs.
+ */
+std::size_t memory_committed_mb(){
+	static std::size_t s_mb = 0;
+	static Timer s_timer;
+	if ( s_mb == 0 || s_timer.elapsed_msec() > 500 ) {
+		s_mb = MemoryUse_get().m_privateBytes / ( 1024 * 1024 );
+		s_timer.start();
+	}
+	return s_mb;
+}
+
 void FrameStats_drawStringOutline( float x, float y, const char* text ){
 	/* Eight offsets rather than a filled band: the stats stay readable over
 	   anything without blacking out the view behind them, and it needs no way
@@ -186,7 +205,8 @@ const char* Renderer_GetStats( int frame2frame ){
 		"/", msec_of( g_frametime_walk ),
 		"/", msec_of( g_frametime_flush ),
 		" | msec: ", g_timer.elapsed_msec(),
-		" | f2f: ", frame2frame
+		" | f2f: ", frame2frame,
+		" | mem: ", memory_committed_mb(), " MB"
 	);
 }
 

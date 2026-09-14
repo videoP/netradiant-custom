@@ -110,3 +110,7 @@ extern bool g_largemap_cullGrid;
 extern bool g_largemap_tjGrid;
 
 void LargeMap_Construct();
+
+/// \brief Prints which options the running session is actually using.
+/// They are latched, so this is not necessarily what Settings shows.
+void LargeMap_reportActive();

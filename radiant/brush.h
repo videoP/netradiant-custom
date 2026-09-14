@@ -52,6 +52,7 @@
 #include "mapfile.h"
 #include "staticbatch.h"
 #include "brushalloc.h"
+#include "brushmemory.h"
 
 /*! rief Mirror of g_largemap_lazyComponents, set by LargeMap_Construct.
 
@@ -1755,6 +1756,52 @@ public:
 		return m_edge_faces;
 	}
 
+	/// \brief Adds what this brush and its faces occupy to \p out. See brushmemory.h.
+	void accountMemory( BrushMemory& out ) const {
+		++out.m_brushes;
+		out.m_brushFixed += sizeof( Brush );
+
+		out.m_facesVector += m_faces.capacity() * sizeof( FaceSmartPointer );
+		out.m_allocations += m_faces.capacity() != 0 ? 1 : 0;
+
+		for ( const auto& face : m_faces )
+		{
+			++out.m_faces;
+			out.m_faceFixed += sizeof( Face );
+			/* m_planeTransformed and m_texdefTransformed: a whole second copy
+			   of the plane and the projection, carried permanently, meaningful
+			   only while something is being dragged. */
+			out.m_faceTransformScratch += sizeof( FacePlane ) + sizeof( TextureProjection );
+
+			const std::size_t points = face->getWinding().points.size();
+			out.m_windingVertices += points;
+			out.m_winding += points * sizeof( WindingVertex );
+			/* Now one pair per face rather than one per winding vertex; this
+			   line records what the per-vertex copies used to cost. */
+			out.m_windingTangents += sizeof( Vector3 ) * 2;
+			out.m_allocations += points != 0 ? 1 : 0;
+			out.m_allocations += 1; // the Face itself
+		}
+
+		const std::size_t arrays =
+		      m_faceCentroidPoints.size() * sizeof( PointVertex )
+		    + m_uniqueVertexPoints.size() * sizeof( DepthTestedPointVertex )
+		    + m_uniqueEdgePoints.size() * sizeof( PointVertex )
+		    + m_edge_indices.size() * sizeof( EdgeRenderIndices )
+		    + m_edge_faces.size() * sizeof( EdgeFaces )
+		    + m_select_vertices.capacity() * sizeof( SelectableVertex )
+		    + m_select_edges.capacity() * sizeof( SelectableEdge );
+		out.m_brushArrays += arrays;
+
+		out.m_allocations += ( m_faceCentroidPoints.size() != 0 )
+		                   + ( m_uniqueVertexPoints.size() != 0 )
+		                   + ( m_uniqueEdgePoints.size() != 0 )
+		                   + ( m_edge_indices.size() != 0 )
+		                   + ( m_edge_faces.size() != 0 )
+		                   + ( m_select_vertices.capacity() != 0 )
+		                   + ( m_select_edges.capacity() != 0 );
+	}
+
 	/// rief The unique edges and vertices, for building component instances from.
 	SelectableEdges& selectableEdges(){
 		return m_select_edges;
@@ -3423,6 +3470,29 @@ class BrushInstance :
 
 	BrushTransformModifier m_transform;
 public:
+	/// \brief Adds what this instance occupies to \p out. See brushmemory.h.
+	void accountMemory( BrushMemory& out ) const {
+		++out.m_instances;
+		out.m_instanceFixed += sizeof( BrushInstance );
+
+		const std::size_t arrays =
+		      m_faceInstances.capacity() * sizeof( FaceInstance )
+		    + m_edgeInstancesStore.capacity() * sizeof( EdgeInstance )
+		    + m_vertexInstancesStore.capacity() * sizeof( VertexInstance )
+		    + m_render_wireframe.m_faceVertex.size() * sizeof( EdgeRenderIndices )
+		    + m_render_selected.size() * sizeof( PointVertex )
+		    + m_faceCentroidPointsCulled.size() * sizeof( PointVertex );
+		out.m_instanceArrays += arrays;
+
+		out.m_allocations += ( m_faceInstances.capacity() != 0 )
+		                   + ( m_edgeInstancesStore.capacity() != 0 )
+		                   + ( m_vertexInstancesStore.capacity() != 0 )
+		                   + ( m_render_wireframe.m_faceVertex.size() != 0 )
+		                   + ( m_render_selected.size() != 0 )
+		                   + ( m_faceCentroidPointsCulled.size() != 0 )
+		                   + 1; // the BrushInstance itself
+	}
+
 	/* Static batching (see staticbatch.h). m_staticBatched means this brush's
 	   faces are already in its chunk's vertex buffer, so it must not submit
 	   them itself while that batch is being drawn. */

@@ -229,7 +229,8 @@ ifeq ($(OS),Win32)
 	CPPFLAGS_COMMON += -DWIN32 -D_WIN32 -D_inline=inline
 	CFLAGS_COMMON += -mms-bitfields
 	LDFLAGS_DLL = -Wl,--add-stdcall-alias
-	LIBS_COMMON = -lws2_32 -luser32 -lgdi32 -lole32
+	# -lpsapi: GetProcessMemoryInfo, for radiant/memreport.cpp
+	LIBS_COMMON = -lws2_32 -luser32 -lgdi32 -lole32 -lpsapi
 	EXE ?= exe
 	A = a
 	DLL = dll
@@ -881,6 +882,7 @@ $(INSTALLDIR)/radiant.$(EXE): \
 	radiant/brush.o \
 	radiant/brush_primit.o \
 	radiant/brushalloc.o \
+	radiant/brushmemory.o \
 	radiant/brushtokens.o \
 	radiant/brushxml.o \
 	radiant/build.o \
@@ -918,6 +920,7 @@ $(INSTALLDIR)/radiant.$(EXE): \
 	radiant/mainframe.o \
 	radiant/main.o \
 	radiant/map.o \
+	radiant/memreport.o \
 	radiant/modelwindow.o \
 	radiant/mru.o \
 	radiant/nullmodel.o \
