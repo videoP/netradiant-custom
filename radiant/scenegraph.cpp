@@ -50,6 +50,8 @@ extern bool g_index_used;                  // false when the traversal fell back
 
 #include <unordered_map>
 #include <vector>
+#include <algorithm>
+#include <iterator>
 #include <cstdint>
 #include <cmath>
 
@@ -105,11 +107,41 @@ public:
 		return true;
 	}
 
+	/// \brief Repairs every cell after the container owning this grid moved.
+	void contentsMoved(){
+		for ( const auto& [ instance, key ] : m_membership )
+		{
+			aabb_extend_by_aabb_safe( m_cells[ key ].bounds, instance->worldAABB() );
+		}
+	}
+
+	/*! \brief Removes \p instance from its cell. False if it is not in this grid.
+
+	    The cell's bounds are left as they are. They are conservative by
+	    construction, so one that is larger than its contents costs a little
+	    culling accuracy and nothing else - the same trade moved() already makes.
+	 */
+	bool erase( scene::Instance* instance ){
+		const auto i = m_membership.find( instance );
+		if ( i == m_membership.end() ) {
+			return false;
+		}
+		std::vector<scene::Instance*>& instances = m_cells[ i->second ].instances;
+		instances.erase( std::remove( instances.begin(), instances.end(), instance ), instances.end() );
+		m_membership.erase( i );
+		return true;
+	}
+
+	bool contains( scene::Instance* instance ) const {
+		return m_membership.find( instance ) != m_membership.end();
+	}
+
 	std::size_t cellCount() const {
 		return m_cells.size();
 	}
 
-	void traverse( const scene::Graph::Walker& walker, const VolumeTest& volume ) const {
+	void traverse( const scene::Graph::Walker& walker, const VolumeTest& volume,
+	               const scene::Instance& owner ) const {
 		for ( const auto& [ key, cell ] : m_cells )
 		{
 			if ( volume.TestAABB( cell.bounds ) == c_volumeOutside ) {
@@ -118,7 +150,7 @@ public:
 			/* Everything here is already drawn as one batch, so walking it
 			   would spend a per-instance cull, state push/pop and virtual call
 			   each, only for the instance to decline to draw. */
-			if ( StaticBatch_cellCovered( key, cell.instances.size() ) ) {
+			if ( StaticBatch_cellCovered( key, owner, cell.instances.size() ) ) {
 				g_count_cells_batched += cell.instances.size();
 				continue;
 			}
@@ -200,7 +232,29 @@ class CompiledGraph final : public scene::Graph, public scene::Instantiable::Obs
 	TypeIdMap<NODETYPEID_MAX> m_nodeTypeIds;
 	TypeIdMap<INSTANCETYPEID_MAX> m_instanceTypeIds;
 
-	std::unordered_map<scene::Instance*, InstanceGrid> m_grids;
+	/*! \brief A grid, plus where its parent's subtree ends in the instance map.
+
+	    The end iterator is remembered because stepping past those children one
+	    at a time is not free: the map is a path-sorted std::map, so ++ is a
+	    red-black tree pointer chase, and worldspawn's children are the whole
+	    map. Measured on a 1 GB map, that skip alone cost 140ms a frame - the
+	    entire frame - even with cell coverage meaning only three instances were
+	    actually visited.
+
+	    Held together with the grid rather than in a table beside it so the two
+	    cannot fall out of step. It is exactly as safe as the scene::Instance*
+	    pointers the grid already stores: both are only valid while no instance
+	    has been added or removed, and both are dropped by the same rebuild -
+	    insert() and erase() set m_indexDirty, and std::map invalidates nothing
+	    else.
+	 */
+	struct GriddedParent
+	{
+		InstanceGrid m_grid;
+		InstanceMap::iterator m_subtreeEnd; // first map entry past the gridded children
+	};
+
+	std::unordered_map<scene::Instance*, GriddedParent> m_grids;
 	bool m_indexDirty = true;          // instances added/removed: grids unusable until rebuilt
 	std::vector<scene::Instance*> m_moved; // moved since the last traversal; cells to grow
 
@@ -213,6 +267,19 @@ class CompiledGraph final : public scene::Graph, public scene::Instantiable::Obs
 	};
 	std::unordered_map<scene::Instance*, ChildBounds> m_childBounds;
 	std::size_t m_boundsGeneration = 1;
+
+	/*! \brief Drops the index whole.
+
+	    Needed either side of a map load. The grids key on scene::Instance*, and
+	    leaving emptied ones behind would let indexInsert() find no grid for the
+	    new map's worldspawn, decide there was nothing to do, and never set the
+	    dirty flag - so the new map would silently never get an index at all.
+	 */
+	void indexInvalidate(){
+		m_grids.clear();
+		m_moved.clear();
+		m_indexDirty = true;
+	}
 
 	/// \brief Something moved. Cached unions may grow but need no full rebuild.
 	void childBoundsMoved(){
@@ -257,6 +324,7 @@ public:
 		}
 
 		StaticBatch_invalidate();
+		indexInvalidate();
 
 		{
 			// creating a scene instance for every node, and filing it in the map
@@ -282,6 +350,7 @@ public:
 		m_rootpath.pop();
 
 		StaticBatch_invalidate(); // drops every brush pointer before the instances go
+		indexInvalidate();        // likewise, and it makes every indexErase below a no-op
 
 		/* likewise: erasing one at a time is O(n^2) */
 		if ( g_largemap_deferEntityList.m_value ) {
@@ -324,9 +393,17 @@ public:
 		}
 		for ( scene::Instance* instance : m_moved )
 		{
-			for ( auto& [ parent, grid ] : m_grids )
+			/* Moving an entity invalidates every child's world bounds, but the
+			   scene's bounds notification names the entity itself. It owns the
+			   grid rather than belonging to it, so repair all of its cells. */
+			const auto owned = m_grids.find( instance );
+			if ( owned != m_grids.end() ) {
+				owned->second.m_grid.contentsMoved();
+				continue;
+			}
+			for ( auto& [ parent, gridded ] : m_grids )
 			{
-				if ( grid.moved( instance ) ) {
+				if ( gridded.m_grid.moved( instance ) ) {
 					break;
 				}
 			}
@@ -383,9 +460,74 @@ public:
 		return ( *i ).second;
 	}
 
+	/*! \brief Files a newly added instance into its parent's grid.
+
+	    Marking the whole index dirty instead costs a full rebuild - measured at
+	    0.6s on a 970k brush map - and that is paid on the next traversal, which
+	    is why creating one brush stalled.
+
+	    Two cases still force a rebuild. An instance appearing *under* something
+	    already filed as a leaf means that thing is not a leaf after all, and the
+	    grid would silently stop traversing its children. And a parent with no
+	    grid is left alone: it may have just crossed the threshold where one
+	    becomes worthwhile, but nothing here can tell, and missing that only
+	    costs an optimisation until the next rebuild.
+	 */
+	void indexInsert( scene::Instance* instance ){
+		if ( m_indexDirty || m_grids.empty() ) {
+			return; // a rebuild is already coming
+		}
+		scene::Instance* parent = instance->parent();
+		if ( parent == 0 ) {
+			m_indexDirty = true;
+			return;
+		}
+		const auto grid = m_grids.find( parent );
+		if ( grid != m_grids.end() ) {
+			grid->second.m_grid.insert( instance );
+			return;
+		}
+		for ( const auto& [ owner, gridded ] : m_grids )
+		{
+			if ( gridded.m_grid.contains( parent ) ) {
+				m_indexDirty = true; // that parent has stopped being a leaf
+				return;
+			}
+		}
+	}
+
+	/// \brief Takes an instance out of the index. Must run while it is still in
+	/// the instance map, since a remembered subtree end may point at its entry.
+	void indexErase( scene::Instance* instance ){
+		/* Whether or not the grids are usable, this pointer is about to become
+		   invalid and repairIndex() would dereference it. */
+		m_moved.erase( std::remove( m_moved.begin(), m_moved.end(), instance ), m_moved.end() );
+
+		if ( m_indexDirty || m_grids.empty() ) {
+			return;
+		}
+
+		if ( m_grids.find( instance ) != m_grids.end() ) {
+			m_indexDirty = true; // a gridded parent itself is going away
+			return;
+		}
+
+		const InstanceMap::iterator entry = m_instances.find( PathConstReference( instance->path() ) );
+		for ( auto& [ owner, gridded ] : m_grids )
+		{
+			/* A subtree end pointing at the entry being erased would dangle;
+			   step it on to the next entry, which is where the subtree will
+			   end once this one is gone. */
+			if ( entry != m_instances.end() && gridded.m_subtreeEnd == entry ) {
+				gridded.m_subtreeEnd = std::next( entry );
+			}
+			gridded.m_grid.erase( instance );
+		}
+	}
+
 	void insert( scene::Instance* instance ) override {
 		m_instances.insert( InstanceMap::value_type( PathConstReference( instance->path() ), instance ) );
-		m_indexDirty = true;
+		indexInsert( instance );
 		childBoundsInvalidate();
 
 		m_observer->insert( instance );
@@ -393,8 +535,8 @@ public:
 	void erase( scene::Instance* instance ) override {
 		m_observer->erase( instance );
 
+		indexErase( instance ); // before the map entry goes; it reads it
 		m_instances.erase( PathConstReference( instance->path() ) );
-		m_indexDirty = true; // grids now hold a dangling pointer; must rebuild before next use
 		childBoundsInvalidate();
 	}
 
@@ -477,18 +619,25 @@ private:
 		const std::size_t depth = self->first.get().size();
 		++i;
 
+		/* Looked up before the pre(), because both outcomes want it: a gridded
+		   parent's children are skipped in the map whether it draws or is
+		   culled, and stepping over them is the expensive part either way. */
+		const auto grid = m_grids.find( self->second );
+		const bool gridded = ( grid != m_grids.end() );
+
 		++g_count_instances;
 		if ( walker.pre( self->first, *self->second ) ) {
-			const auto grid = m_grids.find( self->second );
-			if ( grid != m_grids.end() ) {
-				while ( i != m_instances.end() && i->first.get().size() > depth )
-					++i; // gridded children are leaves; skip the run in the map
-				grid->second.traverse( walker, volume );
+			if ( gridded ) {
+				i = grid->second.m_subtreeEnd; // one step, not one per child
+				grid->second.m_grid.traverse( walker, volume, *self->second );
 			}
 			else{
 				while ( i != m_instances.end() && i->first.get().size() > depth )
 					traverse_visible_recursive( walker, i, volume );
 			}
+		}
+		else if ( gridded ) {
+			i = grid->second.m_subtreeEnd; // subtree skipped
 		}
 		else{
 			while ( i != m_instances.end() && i->first.get().size() > depth )
@@ -521,11 +670,14 @@ private:
 		}
 
 		if ( allLeaves && leafChildren.size() >= c_minChildrenForGrid ) {
-			InstanceGrid& grid = m_grids[ self->second ];
+			GriddedParent& gridded = m_grids[ self->second ];
 			for ( scene::Instance* instance : leafChildren )
 			{
-				grid.insert( instance );
+				gridded.m_grid.insert( instance );
 			}
+			/* i has just been advanced past the subtree, which is precisely
+			   what the traversal needs to jump to. */
+			gridded.m_subtreeEnd = i;
 		}
 	}
 
@@ -546,8 +698,8 @@ private:
 		m_moved.clear();
 
 		std::size_t cells = 0;
-		for ( const auto& [ parent, grid ] : m_grids )
-			cells += grid.cellCount();
+		for ( const auto& [ parent, gridded ] : m_grids )
+			cells += gridded.m_grid.cellCount();
 		globalOutputStream() << "spatial index: " << Unsigned( m_grids.size() ) << " indexed parents, "
 		                     << Unsigned( cells ) << " cells\n";
 	}

@@ -3776,7 +3776,7 @@ public:
 	}
 
 	void renderSolid( Renderer& renderer, const VolumeTest& volume ) const override {
-		if ( m_staticBatched && StaticBatch_active() ) {
+		if ( StaticBatch_covers( *this ) ) {
 			return; // already drawn as part of this view's batched geometry
 		}
 
@@ -3788,7 +3788,7 @@ public:
 	}
 
 	void renderWireframe( Renderer& renderer, const VolumeTest& volume ) const override {
-		if ( m_staticBatched && StaticBatch_active() ) {
+		if ( StaticBatch_covers( *this ) ) {
 			return; // already drawn as part of this view's batched outlines
 		}
 

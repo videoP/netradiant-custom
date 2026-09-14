@@ -146,6 +146,10 @@ public:
 	/// skipped so the selected brush can draw its own highlight.
 	std::size_t m_batchedCount = 0;
 
+	/// \brief Batched brush count per owning entity. Cell coverage is tested
+	/// against one entity's spatial grid, not the global chunk total.
+	std::unordered_map<const scene::Instance*, std::size_t> m_batchedByParent;
+
 	/* 2D outlines take their colour from the owning entity, and one chunk can
 	   hold brushes from several. Only chunks that are purely worldspawn's get
 	   an outline batch; the rest draw their outlines individually, in the right
@@ -181,7 +185,7 @@ public:
 	}
 
 	void buildWire( int direction, const VolumeTest& volume );
-	bool renderWire( Renderer& renderer, const VolumeTest& volume, int direction, Shader* shader );
+	bool renderWire( Renderer& renderer, const VolumeTest& volume, int direction, Shader* shader, double& budget );
 
 	/// \brief Marks the chunk for rebuild and hands its brushes back to the
 	/// unbatched path in the meantime, so nothing is ever drawn by neither.
@@ -386,6 +390,7 @@ void Chunk::build(){
 	std::unordered_map<Shader*, std::vector<BatchVertex>> groups;
 	m_bounds = AABB();
 	m_batchedCount = 0;
+	m_batchedByParent.clear();
 
 	/* Hand every brush back to the unbatched path up front. Only brushes that
 	   make it into a range below get taken back, so no brush can end up drawn
@@ -450,6 +455,7 @@ void Chunk::build(){
 	for ( BrushInstance* brush : included )
 	{
 		brush->m_staticBatched = true;
+		++m_batchedByParent[ brush->parent() ];
 	}
 	m_batchedCount = included.size();
 }
@@ -539,7 +545,7 @@ void Chunk::buildWire( int direction, const VolumeTest& volume ){
 	wire.m_count = static_cast<GLsizei>( indices.size() );
 }
 
-bool Chunk::renderWire( Renderer& renderer, const VolumeTest& volume, int direction, Shader* shader ){
+bool Chunk::renderWire( Renderer& renderer, const VolumeTest& volume, int direction, Shader* shader, double& budget ){
 	if ( m_dirty || m_brushes.empty() || !m_wireEligible ) {
 		return false;
 	}
@@ -549,7 +555,20 @@ bool Chunk::renderWire( Renderer& renderer, const VolumeTest& volume, int direct
 		return false;
 	}
 	if ( !m_wire[ direction ].m_built ) {
+		/* Zooming a 2D view out brings the whole map on screen at once, and
+		   building every chunk's outlines in the frame that happens is a stall
+		   of the same order as the initial batch build. Spend a fixed slice of
+		   the frame on it and let the rest arrive over the next few.
+
+		   A chunk that has not been built yet reports itself uncovered below,
+		   so its brushes draw themselves individually in the meantime - slower,
+		   but nothing disappears. */
+		if ( budget <= 0.0 ) {
+			return false;
+		}
+		const Timer timer;
 		buildWire( direction, volume );
+		budget -= timer.elapsed_sec();
 	}
 	if ( m_wire[ direction ].m_count != 0 ) {
 		renderer.SetState( shader, Renderer::eWireframeOnly );
@@ -654,6 +673,10 @@ bool StaticBatch_begin( Renderer& renderer, const VolumeTest& volume ){
 	const std::size_t c_rebuildBudget = 128;
 	std::size_t rebuilt = 0;
 
+	/* Seconds of this frame that may go on building 2D outline batches. See
+	   Chunk::renderWire. */
+	double wireBudget = 0.020;
+
 	renderer.PushState();
 	for ( auto& [ key, chunk ] : g_cache.m_chunks )
 	{
@@ -665,7 +688,7 @@ bool StaticBatch_begin( Renderer& renderer, const VolumeTest& volume ){
 			++rebuilt;
 		}
 		if ( wireStyle ) {
-			chunk.renderWire( renderer, volume, g_cache.m_wireDirection, wireShader );
+			chunk.renderWire( renderer, volume, g_cache.m_wireDirection, wireShader, wireBudget );
 		}
 		else{
 			chunk.render( renderer, volume );
@@ -689,7 +712,26 @@ void StaticBatch_setSolidSupported( bool supported ){
 	g_cache.m_solidSupported = supported;
 }
 
-bool StaticBatch_cellCovered( std::uint64_t key, std::size_t instanceCount ){
+bool StaticBatch_covers( const BrushInstance& instance ){
+	if ( !g_cache.m_active || !instance.m_staticBatched ) {
+		return false;
+	}
+	if ( !g_cache.m_wireStyle ) {
+		return true; // solid pass: m_staticBatched is exactly the answer
+	}
+	/* A 2D view draws from the per-direction outline batch, which is a
+	   different thing from the solid one: it is built lazily, on a budget, and
+	   not at all for a chunk holding more than one entity's brushes. Answering
+	   with m_staticBatched there would let a brush decline to draw itself while
+	   nothing else drew it either. */
+	const Chunk* chunk = g_cache.findChunk( instance.m_staticBatchChunk );
+	return chunk != nullptr
+	    && chunk->m_wireEligible
+	    && chunk->m_wire[ g_cache.m_wireDirection ].m_built;
+}
+
+bool StaticBatch_cellCovered( std::uint64_t key, const scene::Instance& owner,
+                              std::size_t instanceCount ){
 	if ( !g_cache.m_active ) {
 		return false;
 	}
@@ -699,10 +741,11 @@ bool StaticBatch_cellCovered( std::uint64_t key, std::size_t instanceCount ){
 		return false;
 	}
 	/* The count test is the safety net: anything in the cell that batching
-	   declined to take - a patch, a hidden brush, or a selected one that has to
-	   draw its own highlight - makes the counts disagree, and the cell gets
-	   walked so that thing gets its chance to draw. */
-	if ( chunk->m_batchedCount != instanceCount ) {
+	   declined to take makes this owner's counts disagree, and the cell gets
+	   walked so that thing gets its chance to draw. A chunk-global count is not
+	   sufficient because the same key may contain several entities. */
+	const auto covered = chunk->m_batchedByParent.find( &owner );
+	if ( covered == chunk->m_batchedByParent.end() || covered->second != instanceCount ) {
 		return false;
 	}
 	return g_cache.m_wireStyle

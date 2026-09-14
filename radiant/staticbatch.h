@@ -53,11 +53,12 @@ void StaticBatch_setSolidSupported( bool supported );
     \p key is already covered by a clean batch, so the traversal can skip the
     whole cell instead of walking it to draw nothing.
 
-    \p instanceCount is the cell's instance count as the spatial index sees it.
-    A mismatch means the cell holds something batching declined (a patch, a
-    hidden or oddly transformed brush), so the cell is walked normally.
+    Counts are compared for \p owner specifically. Static chunks may combine
+    several entities at the same world key, so a global count can accidentally
+    hide an unbatched cell belonging to another entity.
  */
-bool StaticBatch_cellCovered( std::uint64_t key, std::size_t instanceCount );
+bool StaticBatch_cellCovered( std::uint64_t key, const scene::Instance& owner,
+                              std::size_t instanceCount );
 
 /// \brief The brush's geometry, selection or visibility changed. Its chunk is
 /// rebuilt before it is next drawn; until then the brush draws itself.
@@ -69,6 +70,15 @@ void StaticBatch_brushRemoved( const BrushInstance& instance );
 void StaticBatch_instanceChanged( scene::Instance& instance );
 
 /// \brief Discards everything; the next frame rebuilds from the scene.
+/*! \brief Whether the batch currently being drawn really does contain \p instance.
+
+    BrushInstance::m_staticBatched only says the solid batch holds it. The 2D
+    views draw from a separate per-direction outline batch which may not exist
+    for that chunk, and a brush that skips drawing on the strength of the wrong
+    one simply disappears.
+ */
+bool StaticBatch_covers( const BrushInstance& instance );
+
 void StaticBatch_invalidate();
 /// \brief Releases GL buffers. Requires a current context.
 void StaticBatch_release();
