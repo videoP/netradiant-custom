@@ -31,7 +31,13 @@
 /* dependencies */
 #include "q3map2.h"
 #include "tjunction.h"
+#include "timer.h"
+
 #include <ranges>
+#include <cstdint>
+#include <cmath>
+#include <limits>
+#include <vector>
 
 
 
@@ -75,6 +81,246 @@ int c_totalVerts;
 
 int c_natural, c_rotate, c_cant;
 int c_broken;
+size_t c_lineTests;
+size_t c_gridMissed, c_gridOther;
+}
+
+
+/*
+   -tjgrid: finding the edge line an edge belongs to
+   ------------------------------------------------
+
+   AddEdge() below compares an edge with every edge line found so far. Both the
+   number of edges and the number of lines grow with the map, so the work grows
+   with the square of it; on a few hundred thousand brushes this is the most
+   expensive thing in the compile by a wide margin.
+
+   What the comparison actually asks is whether both ends of the edge lie within
+   POINT_ON_LINE_EPSILON of the line, so only lines running close to the edge can
+   ever match. Two indexes narrow it down, and whatever they turn up is then put
+   back into creation order and tested exactly as before - so an edge still joins
+   the first line, in creation order, that it lies on.
+
+   Axial lines are indexed by their two perpendicular coordinates and nothing
+   else. A line along x is fixed by its y and z, so every edge on it hashes to
+   the same place no matter where along the map it is. This matters: collinear
+   geometry is regularly split across the map with gaps in between - two columns
+   sharing a floor edge, say - and an index with any notion of extent would file
+   those as separate lines. That is not harmless. A longer edge crossing both
+   would then find only one of them and the T-junctions against the other would
+   go unwelded, which is a crack in the map.
+
+   Everything else is indexed by the cells its edges pass through. A run of
+   collinear angled geometry is in practice contiguous, so the cells overlap and
+   the line is found.
+ */
+
+namespace
+{
+/* powers of two; the key need not be recoverable from the bucket, as a
+   collision only costs an extra exact test */
+constexpr size_t TJGRID_BUCKETS = 1 << 20;
+constexpr float TJGRID_CELL = 64.f;         /* cells for the segment index */
+constexpr float TJGRID_AXIAL_CELL = 4.f;    /* finer: an axial key has only two coordinates in it */
+constexpr int TJGRID_MAX_CELLS = 4096;      /* bound on the cells one edge may cover */
+constexpr float TJGRID_MARGIN = 0.5f;       /* comfortably over POINT_ON_LINE_EPSILON, applied when filing */
+
+std::vector<std::vector<uint32_t>> tjSegBuckets;
+std::vector<std::vector<uint32_t>> tjAxialBuckets;
+std::vector<size_t> tjUsedSeg, tjUsedAxial;     /* so an entity clears only what it filled */
+std::vector<uint32_t> tjSeen;                   /* edge line -> the query that last gathered it */
+std::vector<uint32_t> tjCandidates;
+uint32_t tjQueryId;
+MinMax tjWorld;     /* the lookup follows the edge's line only as far as there is map to follow it through */
+
+inline size_t tjHash( int x, int y, int z ){
+	uint32_t h = uint32_t( x ) * 0x8da6b343u ^ uint32_t( y ) * 0xd8163841u ^ uint32_t( z ) * 0xcb1ab31fu;
+	h ^= h >> 15;
+	return h & ( TJGRID_BUCKETS - 1 );
+}
+
+inline int tjCellOf( float v ){
+	return int( std::floor( v / TJGRID_CELL ) );
+}
+
+inline int tjAxialCellOf( float v ){
+	return int( std::floor( v / TJGRID_AXIAL_CELL ) );
+}
+
+/* which axis a direction runs along, or -1. Normalising an axial difference
+   gives exactly +-1, so this is an exact test - note it is stricter than the
+   one AddEdge() uses to sort edges into the two passes, which also lets through
+   directions such as ( 2/3, 2/3, -1/3 ) whose components merely sum to one */
+inline int tjAxialAxis( const Vector3& dir ){
+	for ( int i = 0; i < 3; ++i )
+		if ( dir[i] == 1.f || dir[i] == -1.f ) {
+			return i;
+		}
+	return -1;
+}
+
+void tjAdd( std::vector<std::vector<uint32_t>>& buckets, std::vector<size_t>& used, size_t b, uint32_t line ){
+	std::vector<uint32_t>& bucket = buckets[ b ];
+	if ( bucket.empty() ) {
+		used.push_back( b );
+	}
+	if ( std::find( bucket.cbegin(), bucket.cend(), line ) == bucket.cend() ) {
+		bucket.push_back( line );
+	}
+}
+
+/*
+   The cells a segment passes through (Amanatides & Woo). Walking the cells
+   rather than the bounding box matters: a long diagonal edge passes through a
+   few dozen cells but its bounding box spans thousands.
+ */
+template<typename Visitor>
+void tjSegmentCells( const Vector3& v1, const Vector3& v2, Visitor visit ){
+	const Vector3 d = v2 - v1;
+	int cell[3], last[3], step[3];
+	double tMax[3], tDelta[3];
+
+	for ( int i = 0; i < 3; ++i )
+	{
+		cell[i] = tjCellOf( v1[i] );
+		last[i] = tjCellOf( v2[i] );
+		if ( d[i] > 0 ) {
+			step[i] = 1;
+			tDelta[i] = TJGRID_CELL / d[i];
+			tMax[i] = ( ( cell[i] + 1 ) * TJGRID_CELL - v1[i] ) / d[i];
+		}
+		else if ( d[i] < 0 ) {
+			step[i] = -1;
+			tDelta[i] = TJGRID_CELL / -d[i];
+			tMax[i] = ( cell[i] * TJGRID_CELL - v1[i] ) / d[i];
+		}
+		else{
+			step[i] = 0;
+			tDelta[i] = std::numeric_limits<double>::max();
+			tMax[i] = std::numeric_limits<double>::max();
+		}
+	}
+
+	for ( int guard = 0; guard < TJGRID_MAX_CELLS; ++guard )
+	{
+		visit( cell[0], cell[1], cell[2] );
+		if ( cell[0] == last[0] && cell[1] == last[1] && cell[2] == last[2] ) {
+			break;
+		}
+		const int i = ( tMax[0] < tMax[1] )? ( ( tMax[0] < tMax[2] )? 0 : 2 )
+		                                   : ( ( tMax[1] < tMax[2] )? 1 : 2 );
+		if ( step[i] == 0 ) {
+			break;  /* the far cell cannot be reached: give up rather than spin */
+		}
+		cell[i] += step[i];
+		tMax[i] += tDelta[i];
+	}
+}
+
+/*
+   File a line under the edge just put on it.
+
+   Two points within the match epsilon of each other still land in different
+   cells when they fall either side of a boundary, so the edge is also filed
+   under the cells it would occupy were it shifted by the epsilon - all eight
+   corners of that, since the boundary it straddles may be on any axis. This is
+   the same margin the lookup would otherwise have to apply to all 27 neighbours
+   of every cell it visits, and the lookup visits far more cells than this does:
+   it is much cheaper here, and it costs nearly nothing in space, because away
+   from a boundary all eight shifts give the cell the edge is in already.
+ */
+void tjRegister( uint32_t line, const Vector3& v1, const Vector3& v2 ){
+	const edgeLine_t& e = edgeLines[ line ];
+	const int axis = tjAxialAxis( e.dir );
+	if ( axis >= 0 ) {
+		const int b = ( axis + 1 ) % 3, c = ( axis + 2 ) % 3;
+		for ( int db = -1; db <= 1; ++db )
+			for ( int dc = -1; dc <= 1; ++dc )
+				tjAdd( tjAxialBuckets, tjUsedAxial,
+				       tjHash( axis, tjAxialCellOf( e.origin[b] ) + db, tjAxialCellOf( e.origin[c] ) + dc ), line );
+	}
+	else{
+		for ( int i = 0; i < 8; ++i )
+		{
+			const Vector3 shift( ( i & 1 )? TJGRID_MARGIN : -TJGRID_MARGIN,
+			                     ( i & 2 )? TJGRID_MARGIN : -TJGRID_MARGIN,
+			                     ( i & 4 )? TJGRID_MARGIN : -TJGRID_MARGIN );
+			tjSegmentCells( v1 + shift, v2 + shift, [line]( int x, int y, int z ){
+				tjAdd( tjSegBuckets, tjUsedSeg, tjHash( x, y, z ), line );
+			} );
+		}
+	}
+}
+
+/* the lines that could hold this edge, in creation order */
+void tjGather( const Vector3& v1, const Vector3& v2, const Vector3& dir ){
+	tjCandidates.clear();
+	tjSeen.resize( edgeLines.size(), UINT32_MAX );
+	const uint32_t id = ++tjQueryId;
+
+	const auto take = [id]( uint32_t line ){
+		if ( tjSeen[ line ] != id ) {
+			tjSeen[ line ] = id;
+			tjCandidates.push_back( line );
+		}
+	};
+
+	/* every axial line running near this end of the edge, from anywhere in the
+	   map; a cell of margin each way covers the match epsilon */
+	for ( int axis = 0; axis < 3; ++axis )
+	{
+		const int qb = tjAxialCellOf( v1[ ( axis + 1 ) % 3 ] );
+		const int qc = tjAxialCellOf( v1[ ( axis + 2 ) % 3 ] );
+		for ( const uint32_t line : tjAxialBuckets[ tjHash( axis, qb, qc ) ] )
+			take( line );
+	}
+
+	/* and the rest, from the cells along the edge - carried on past both ends to
+	   the edges of the map, because a line is regularly shared by two runs of
+	   geometry a long way apart, with nothing filed in the cells between. A
+	   surface cut up by the BSP tree does this constantly: the pieces meet the
+	   cutting plane along one line however far apart they end up */
+	Vector3 from = v1, to = v2;
+	{
+		const float length = float( vector3_length( v2 - v1 ) );
+		float tMin = std::numeric_limits<float>::lowest(), tMax = std::numeric_limits<float>::max();
+		for ( int i = 0; i < 3; ++i )
+		{
+			if ( fabs( dir[i] ) < 1e-6f ) {
+				continue;   /* parallel to this pair of slabs */
+			}
+			const float t1 = ( tjWorld.mins[i] - v1[i] ) / dir[i];
+			const float t2 = ( tjWorld.maxs[i] - v1[i] ) / dir[i];
+			tMin = std::max( tMin, std::min( t1, t2 ) );
+			tMax = std::min( tMax, std::max( t1, t2 ) );
+		}
+		/* never shorter than the edge itself */
+		from = v1 + dir * std::min( tMin, 0.f );
+		to = v1 + dir * std::max( tMax, length );
+	}
+
+	tjSegmentCells( from, to, [&take]( int x, int y, int z ){
+		for ( const uint32_t line : tjSegBuckets[ tjHash( x, y, z ) ] )
+			take( line );
+	} );
+
+	/* the stock scan takes the first line in creation order that matches */
+	std::sort( tjCandidates.begin(), tjCandidates.end() );
+}
+
+void tjReset( const MinMax& world ){
+	tjWorld = world;
+	tjSegBuckets.resize( TJGRID_BUCKETS );
+	tjAxialBuckets.resize( TJGRID_BUCKETS );
+	for ( const size_t b : tjUsedSeg )
+		tjSegBuckets[ b ].clear();
+	for ( const size_t b : tjUsedAxial )
+		tjAxialBuckets[ b ].clear();
+	tjUsedSeg.clear();
+	tjUsedAxial.clear();
+	tjSeen.clear();
+	tjQueryId = 0;
+}
 }
 
 // these should be whatever epsilon we actually expect,
@@ -131,18 +377,62 @@ static int AddEdge( bspDrawVert_t& dv1, bspDrawVert_t& dv2, bool createNonAxial 
 		}
 	}
 
-	for ( edgeLine_t& e : edgeLines ) {
-		if ( !float_equal_epsilon( vector3_dot( v1, e.normal1 ), e.dist1, POINT_ON_LINE_EPSILON )
-		  || !float_equal_epsilon( vector3_dot( v1, e.normal2 ), e.dist2, POINT_ON_LINE_EPSILON )
-		  || !float_equal_epsilon( vector3_dot( v2, e.normal1 ), e.dist1, POINT_ON_LINE_EPSILON )
-		  || !float_equal_epsilon( vector3_dot( v2, e.normal2 ), e.dist2, POINT_ON_LINE_EPSILON ) ) {
-			continue;
+	const auto onLine = [&v1, &v2]( const edgeLine_t& e ){
+		++c_lineTests;
+		return float_equal_epsilon( vector3_dot( v1, e.normal1 ), e.dist1, POINT_ON_LINE_EPSILON )
+		    && float_equal_epsilon( vector3_dot( v1, e.normal2 ), e.dist2, POINT_ON_LINE_EPSILON )
+		    && float_equal_epsilon( vector3_dot( v2, e.normal1 ), e.dist1, POINT_ON_LINE_EPSILON )
+		    && float_equal_epsilon( vector3_dot( v2, e.normal2 ), e.dist2, POINT_ON_LINE_EPSILON );
+	};
+
+	if ( tjGrid ) {
+		tjGather( v1, v2, dir );
+		int found = -1;
+		for ( const uint32_t i : tjCandidates )
+			if ( onLine( edgeLines[ i ] ) ) {
+				found = int( i );
+				break;
+			}
+
+		/* -tjverify: what the scan this replaces would have picked */
+		if ( tjVerify ) {
+			int scanned = -1;
+			for ( size_t i = 0; i < edgeLines.size(); ++i )
+				if ( onLine( edgeLines[ i ] ) ) {
+					scanned = int( i );
+					break;
+				}
+			if ( scanned != found ) {
+				if ( scanned >= 0 && found < 0 ) {
+					++c_gridMissed;     /* a line the index did not offer at all */
+				}
+				else{
+					++c_gridOther;      /* a different, but still valid, line */
+				}
+			}
 		}
 
-		// this is the edge
-		InsertPointOnEdge( v1, e );
-		InsertPointOnEdge( v2, e );
-		return &e - &edgeLines[0];
+		if ( found >= 0 ) {
+			edgeLine_t& e = edgeLines[ found ];
+			// this is the edge
+			InsertPointOnEdge( v1, e );
+			InsertPointOnEdge( v2, e );
+			tjRegister( uint32_t( found ), v1, v2 );
+			return found;
+		}
+	}
+	else
+	{
+		for ( edgeLine_t& e : edgeLines ) {
+			if ( !onLine( e ) ) {
+				continue;
+			}
+
+			// this is the edge
+			InsertPointOnEdge( v1, e );
+			InsertPointOnEdge( v2, e );
+			return &e - &edgeLines[0];
+		}
 	}
 
 	// create a new edge
@@ -157,6 +447,10 @@ static int AddEdge( bspDrawVert_t& dv1, bspDrawVert_t& dv2, bool createNonAxial 
 
 	InsertPointOnEdge( v1, e );
 	InsertPointOnEdge( v2, e );
+
+	if ( tjGrid ) {
+		tjRegister( edgeLines.size() - 1, v1, v2 );
+	}
 
 	return edgeLines.size() - 1;
 }
@@ -493,6 +787,18 @@ void FixTJunctions( const entity_t& ent ){
 
 	/* note it */
 	Sys_FPrintf( SYS_VRB, "--- FixTJunctions ---\n" );
+	const Timer timer;
+
+	if ( tjGrid ) {
+		MinMax world;
+		for ( int i = ent.firstDrawSurf; i < numMapDrawSurfs; ++i )
+		{
+			const mapDrawSurface_t& ds = mapDrawSurfs[ i ];
+			for ( int j = 0; j < ds.numVerts(); ++j )
+				world.extend( ds.verts[ j ].xyz );
+		}
+		tjReset( world );
+	}
 
 	// add all the edges
 	// this actually creates axial edges, but it
@@ -577,4 +883,10 @@ void FixTJunctions( const entity_t& ent ){
 	Sys_FPrintf( SYS_VRB, "%9d rotated orders\n", c_rotate );
 	Sys_FPrintf( SYS_VRB, "%9d can't order\n", c_cant );
 	Sys_FPrintf( SYS_VRB, "%9d broken (degenerate) surfaces removed\n", c_broken );
+	Sys_FPrintf( SYS_VRB, "%9zu edge line tests\n", c_lineTests );
+	if ( tjVerify ) {
+		Sys_FPrintf( SYS_VRB, "%9zu edges the index missed a line for\n", c_gridMissed );
+		Sys_FPrintf( SYS_VRB, "%9zu edges put on a different line\n", c_gridOther );
+	}
+	Sys_FPrintf( SYS_VRB, "%9.1f seconds elapsed\n", timer.elapsed_sec() );
 }

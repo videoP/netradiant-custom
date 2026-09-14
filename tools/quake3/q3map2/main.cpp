@@ -120,6 +120,19 @@ int main( int argc, char **argv ){
 			Sys_Printf( "Gridded brush pairing in CullSides enabled\n" );
 		}
 
+		/* grid the edge line lookup in FixTJunctions() */
+		while ( args.takeArg( "-tjgrid" ) ) {
+			tjGrid = true;
+			Sys_Printf( "Gridded edge line lookup in FixTJunctions enabled\n" );
+		}
+
+		/* check the above against the scan it replaces (slow: does both) */
+		while ( args.takeArg( "-tjverify" ) ) {
+			tjGrid = true;
+			tjVerify = true;
+			Sys_Printf( "Verifying gridded edge line lookup against the full scan\n" );
+		}
+
 		/* max_map_draw_surfs */
 		while ( args.takeArg( "-maxmapdrawsurfs" ) ) {
 			max_map_draw_surfs = abs( atoi( args.takeNext() ) );

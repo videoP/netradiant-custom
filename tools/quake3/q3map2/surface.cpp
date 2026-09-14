@@ -3097,6 +3097,7 @@ void FilterDrawsurfsIntoTree( entity_t& e, tree_t& tree ){
 
 	/* note it */
 	Sys_FPrintf( SYS_VRB, "--- FilterDrawsurfsIntoTree ---\n" );
+	const Timer timer;
 
 	/* filter surfaces into the tree */
 	numSurfs = 0;
@@ -3293,6 +3294,7 @@ void FilterDrawsurfsIntoTree( entity_t& e, tree_t& tree ){
 	/* emit some statistics */
 	Sys_FPrintf( SYS_VRB, "%9d references\n", numRefs );
 	Sys_FPrintf( SYS_VRB, "%9d (%zu) emitted drawsurfs\n", numSurfs, bspDrawSurfaces.size() );
+	Sys_FPrintf( SYS_VRB, "%9.1f seconds elapsed\n", timer.elapsed_sec() );
 	Sys_FPrintf( SYS_VRB, "%9d stripped face surfaces\n", numStripSurfaces );
 	Sys_FPrintf( SYS_VRB, "%9d fanned face surfaces\n", numFanSurfaces );
 	Sys_FPrintf( SYS_VRB, "%9d maxarea'd face surfaces\n", numMaxAreaSurfaces );

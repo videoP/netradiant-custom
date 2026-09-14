@@ -1956,6 +1956,8 @@ inline bool useCustomInfoParms;
 inline bool leaktest;
 inline bool nodetail;
 inline bool cullGrid;                   /* ydnar-era CullSides() is all-pairs; grid it for large maps */
+inline bool tjGrid;                     /* likewise AddEdge() in FixTJunctions() scans every edge line */
+inline bool tjVerify;                   /* run both and count where the index disagrees with the full scan */
 inline bool nosubdivide;
 inline bool notjunc;
 inline bool fulldetail;
