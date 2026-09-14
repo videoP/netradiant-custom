@@ -83,7 +83,7 @@ inline void Winding_DrawWireframe( const Winding& winding ){
 	gl().glDrawArrays( GL_LINE_LOOP, 0, GLsizei( winding.numpoints ) );
 }
 
-inline void Winding_Draw( const Winding& winding, const Vector3& normal, RenderStateFlags state ){
+inline void Winding_Draw( const Winding& winding, const Vector3& normal, RenderStateFlags state, const Vector3& tangent, const Vector3& bitangent ){
 	gl().glVertexPointer( 3, GL_DOUBLE, sizeof( WindingVertex ), &winding.points.data()->vertex );
 
 	Vector3 normals[c_brush_maxFaces];
@@ -96,8 +96,17 @@ inline void Winding_Draw( const Winding& winding, const Vector3& normal, RenderS
 		}
 		gl().glNormalPointer( GL_FLOAT, sizeof( Vector3 ), normals );
 		gl().glVertexAttribPointer( c_attr_TexCoord0, 2, GL_FLOAT, 0, sizeof( WindingVertex ), &winding.points.data()->texcoord );
-		gl().glVertexAttribPointer( c_attr_Tangent, 3, GL_FLOAT, 0, sizeof( WindingVertex ), &winding.points.data()->tangent );
-		gl().glVertexAttribPointer( c_attr_Binormal, 3, GL_FLOAT, 0, sizeof( WindingVertex ), &winding.points.data()->bitangent );
+		/* One value for the whole face, expanded here the same way the normal
+		   above is, rather than stored against every vertex. */
+		Vector3 tangents[c_brush_maxFaces];
+		Vector3 bitangents[c_brush_maxFaces];
+		for ( std::size_t i = 0; i != winding.numpoints; ++i )
+		{
+			tangents[i] = tangent;
+			bitangents[i] = bitangent;
+		}
+		gl().glVertexAttribPointer( c_attr_Tangent, 3, GL_FLOAT, 0, sizeof( Vector3 ), tangents );
+		gl().glVertexAttribPointer( c_attr_Binormal, 3, GL_FLOAT, 0, sizeof( Vector3 ), bitangents );
 	}
 	else
 	{
@@ -573,8 +582,8 @@ public:
 		Texdef_FitTexture( m_projection, m_shader.width(), m_shader.height(), normal, winding, s_repeat, t_repeat, only_dimension );
 	}
 
-	void emitTextureCoordinates( Winding& winding, const Vector3& normal, const Matrix4& localToWorld ) const {
-		Texdef_EmitTextureCoordinates( m_projection, m_shader.width(), m_shader.height(), winding, normal, localToWorld );
+	void emitTextureCoordinates( Winding& winding, const Vector3& normal, const Matrix4& localToWorld, Vector3& tangent, Vector3& bitangent ) const {
+		Texdef_EmitTextureCoordinates( m_projection, m_shader.width(), m_shader.height(), winding, normal, localToWorld, tangent, bitangent );
 	}
 
 	void transform( const Plane3& plane, const Matrix4& matrix ){
@@ -928,6 +937,10 @@ private:
 	TextureProjection m_texdefTransformed;
 
 	Winding m_winding;
+	/* The face's tangent basis. One pair per face rather than a copy in every
+	   winding vertex; only RENDER_BUMP reads them. See winding.h. */
+	Vector3 m_tangent;
+	Vector3 m_bitangent;
 	Vector3 m_centroid;
 	Vector3 m_centroid_cached; //this is far not pretty hack! (invariant point for texlock in AP)
 	bool m_filtered;
@@ -1020,7 +1033,7 @@ public:
 	}
 
 	void render( RenderStateFlags state ) const override {
-		Winding_Draw( m_winding, m_planeTransformed.plane3().normal(), state );
+		Winding_Draw( m_winding, m_planeTransformed.plane3().normal(), state, m_tangent, m_bitangent );
 	}
 
 	void updateFiltered() override {
@@ -1289,7 +1302,7 @@ public:
 	}
 
 	void EmitTextureCoordinates(){
-		Texdef_EmitTextureCoordinates( m_texdefTransformed, m_shader.width(), m_shader.height(), m_winding, plane3().normal(), g_matrix4_identity );
+		Texdef_EmitTextureCoordinates( m_texdefTransformed, m_shader.width(), m_shader.height(), m_winding, plane3().normal(), g_matrix4_identity, m_tangent, m_bitangent );
 	}
 
 
@@ -3100,7 +3113,9 @@ public:
 
 	void render( RenderStateFlags state ) const override {
 		if ( ( state & RENDER_FILL ) != 0 ) {
-			Winding_Draw( m_winding, m_plane.normal(), state );
+			/* The clip preview has no texture projection, so no tangent basis.
+			   It is never drawn in the RENDER_BUMP mode that would read one. */
+			Winding_Draw( m_winding, m_plane.normal(), state, Vector3( 0, 0, 0 ), Vector3( 0, 0, 0 ) );
 		}
 		else
 		{

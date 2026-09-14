@@ -271,7 +271,7 @@ void Texdef_Construct_local2tex( const TextureProjection& projection, std::size_
 	}
 }
 
-void Texdef_EmitTextureCoordinates( const TextureProjection& projection, std::size_t width, std::size_t height, Winding& w, const Vector3& normal, const Matrix4& localToWorld ){
+void Texdef_EmitTextureCoordinates( const TextureProjection& projection, std::size_t width, std::size_t height, Winding& w, const Vector3& normal, const Matrix4& localToWorld, Vector3& tangent, Vector3& bitangent ){
 	if ( w.numpoints < 3 ) {
 		return;
 	}
@@ -299,17 +299,14 @@ void Texdef_EmitTextureCoordinates( const TextureProjection& projection, std::si
 		matrix4_multiply_by_matrix4( local2tex, xyz2st );
 	}
 
-	const Vector3 tangent( vector3_normalised( matrix4_transposed( local2tex ).x().vec3() ) );
-	const Vector3 bitangent( vector3_normalised( matrix4_transposed( local2tex ).y().vec3() ) );
+	tangent = vector3_normalised( matrix4_transposed( local2tex ).x().vec3() );
+	bitangent = vector3_normalised( matrix4_transposed( local2tex ).y().vec3() );
 
 	matrix4_multiply_by_matrix4( local2tex, localToWorld );
 
 	for ( WindingVertex& v : w )
 	{
 		v.texcoord = matrix4_transformed_point( local2tex, v.vertex ).vec2();
-
-		v.tangent = tangent;
-		v.bitangent = bitangent;
 	}
 }
 

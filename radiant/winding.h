@@ -82,13 +82,19 @@ enum PlaneClassification
 const std::size_t c_brush_maxFaces = 1024;
 
 
+/*! rief 40 bytes.
+
+    tangent and bitangent used to live here, but Texdef_EmitTextureCoordinates
+    computes them once per face and wrote the same pair into every vertex of it.
+    Only the RENDER_BUMP path reads them, and it now takes them from the Face.
+    Measured on a 970k brush map: 25.2M winding vertices, so 577 MB of exact
+    duplication.
+ */
 class WindingVertex
 {
 public:
 	DoubleVector3 vertex;
 	Vector2 texcoord;
-	Vector3 tangent;
-	Vector3 bitangent;
 	std::size_t adjacent;
 };
 
