@@ -56,6 +56,7 @@
 #include "preferences.h"
 #include "watchbsp.h"
 #include "autosave.h"
+#include "largemap.h"  // g_largemap_cullGrid
 
 QEGlobals_t g_qeglobals;
 
@@ -160,6 +161,12 @@ void build_init_variables(){
 		if( !path.empty() )
 			stream << " -fs_pakpath " << Quoted( path );
 	build_set_variable( "ExtraResourcePaths", stream );
+	StringOutputStream largeMapFlags( 64 );
+	if ( g_largemap_cullGrid )
+		largeMapFlags << " -cullgrid";
+	if ( g_largemap_tjGrid )
+		largeMapFlags << " -tjgrid";
+	build_set_variable( "LargeMapFlags", largeMapFlags );
 	build_set_variable( "MonitorAddress", ( g_WatchBSP_Enabled ) ? RADIANT_MONITOR_ADDRESS : "" );
 	build_set_variable( "GameName", gamename_get() );
 

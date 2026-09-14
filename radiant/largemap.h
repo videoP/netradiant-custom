@@ -61,4 +61,27 @@ extern LatchedBool g_largemap_shareShaderNames;
  */
 extern LatchedBool g_largemap_poolFaces;
 
+/*! \brief Pass -cullgrid to q3map2, so that its CullSides stage pairs brushes
+    through a spatial grid instead of testing every brush against every other.
+
+    Unlike the rest of this page this one is not a setting of the editor at all:
+    radiant and q3map2 are separate programs, so all a tick here can do is put a
+    switch on the compiler's command line. It reaches any build command that
+    runs q3map2, the same way -fs_pakpath does, and so it is not latched - the
+    next compile picks it up.
+
+    It needs a q3map2 that knows the switch; an older one prints "Unknown option"
+    and compiles as it always did.
+ */
+extern bool g_largemap_cullGrid;
+
+/*! \brief Pass -tjgrid to q3map2, so that its FixTJunctions stage finds the edge
+    line an edge belongs to through a spatial grid rather than by scanning every
+    edge line in the map.
+
+    Same arrangement as g_largemap_cullGrid: a command line switch, not a
+    setting of the editor.
+ */
+extern bool g_largemap_tjGrid;
+
 void LargeMap_Construct();

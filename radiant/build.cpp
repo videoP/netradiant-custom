@@ -264,6 +264,12 @@ public:
 			 && strstr( m_buffer.c_str(), "[ExtraResourcePaths]" ) == nullptr ){ // has no extra path right away (could have been added by this before)
 				m_tool.push_back( new VariableString( "[ExtraResourcePaths]" ) );
 			}
+			// same again for the Large Maps compile options: they are general
+			// q3map2 options, so appending them to every q3map2 command is safe
+			if( strstr( m_buffer.c_str(), "[RadiantPath]q3map2.[ExecutableType]" ) != nullptr
+			 && strstr( m_buffer.c_str(), "[LargeMapFlags]" ) == nullptr ){
+				m_tool.push_back( new VariableString( "[LargeMapFlags]" ) );
+			}
 			m_buffer.clear();
 		}
 	}

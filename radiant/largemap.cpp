@@ -16,6 +16,10 @@ LatchedBool g_largemap_incrementalBounds( false, "Cached container bounds" );
 LatchedBool g_largemap_shareShaderNames( false, "Shared shader names" );
 LatchedBool g_largemap_poolFaces( false, "Pooled face allocation" );
 
+/* not latched: these are only ever read when a build command is assembled */
+bool g_largemap_cullGrid = false;
+bool g_largemap_tjGrid = false;
+
 
 void LargeMap_constructPreferences( PreferencesPage& page ){
 	page.appendCheckBox(
@@ -97,6 +101,39 @@ void LargeMap_constructPreferences( PreferencesPage& page ){
 	    "Memory taken by faces is not returned to the system until you quit,\n"
 	    "which suits an editor, since the peak is reached when the map loads."
 	);
+	page.appendCheckBox(
+	    "Compile", "Gridded CullSides (q3map2 -cullgrid)",
+	    g_largemap_cullGrid
+	)->setToolTip(
+	    "Speeds up the CullSides stage of a compile on a map with many brushes.\n\n"
+	    "q3map2 works out which brush faces are buried inside other brushes by\n"
+	    "testing every brush against every other one, so the work grows with the\n"
+	    "square of the brush count and nearly all of it goes on proving that\n"
+	    "brushes at opposite ends of the map do not touch. This sorts them into a\n"
+	    "grid first and compares only brushes that are actually near each other.\n\n"
+	    "Measured on a 97k brush map: CullSides went from 26.7s to 0.3s, and the\n"
+	    "compiled .bsp was identical.\n\n"
+	    "Unlike the rest of this page this is not a setting of the editor: it adds\n"
+	    "-cullgrid to the command line of every build command that runs q3map2. It\n"
+	    "needs a q3map2 new enough to know that switch - an older one will print\n"
+	    "\"Unknown option\" and compile exactly as it did before."
+	);
+
+	page.appendCheckBox(
+	    "Compile", "Gridded FixTJunctions (q3map2 -tjgrid)",
+	    g_largemap_tjGrid
+	)->setToolTip(
+	    "Speeds up the FixTJunctions stage of a compile on a map with many brushes.\n\n"
+	    "To weld cracks between neighbouring faces q3map2 groups edges onto the\n"
+	    "lines they lie along, and it finds an edge's line by comparing it with\n"
+	    "every line found so far. Both numbers grow with the map, so the work grows\n"
+	    "with the square of it. This looks up only the lines that run near the edge.\n\n"
+	    "Measured on a 6.4k brush map: 1.9 billion line comparisons down to 5\n"
+	    "million, 1.6s to 0.1s, and the compiled .bsp was identical.\n\n"
+	    "Like the option above this is a q3map2 command line switch rather than a\n"
+	    "setting of the editor, and an older q3map2 will ignore it with a warning."
+	);
+
 	/* To read the effect of these: View / Show Stats. */
 }
 
@@ -139,6 +176,16 @@ void LargeMap_Construct(){
 	    "LargeMapStaticBatch",
 	    makeBoolStringImportCallback( LatchedAssignCaller( g_largemap_staticBatch ) ),
 	    BoolExportStringCaller( g_largemap_staticBatch.m_latched )
+	);
+	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapCullGrid",
+	    BoolImportStringCaller( g_largemap_cullGrid ),
+	    BoolExportStringCaller( g_largemap_cullGrid )
+	);
+	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapTJGrid",
+	    BoolImportStringCaller( g_largemap_tjGrid ),
+	    BoolExportStringCaller( g_largemap_tjGrid )
 	);
 
 	LargeMap_registerPreferencesPage();
