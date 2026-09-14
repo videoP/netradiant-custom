@@ -77,6 +77,15 @@ extern LatchedBool g_largemap_poolFaces;
  */
 extern LatchedBool g_largemap_fastParse;
 
+/*! rief Build each brush's vertex/edge editing data only when something asks
+    for it, rather than for every brush in the map at load.
+
+    Measured on a 1 GB map: the edge and vertex instances come to ~600 B a brush
+    and five of the twenty-five allocations, and nothing reads them until you
+    enter vertex or edge mode.
+ */
+extern LatchedBool g_largemap_lazyComponents;
+
 /*! \brief Pass -cullgrid to q3map2, so that its CullSides stage pairs brushes
     through a spatial grid instead of testing every brush against every other.
 

@@ -7,6 +7,7 @@
 #include "stringio.h"
 #include "preferencesystem.h"
 #include "script/scripttokeniser.h" // g_scriptTokeniser_fastPath
+#include "brushalloc.h"             // g_brush_lazyComponents
 
 #include <QCheckBox>
 
@@ -17,6 +18,7 @@ LatchedBool g_largemap_incrementalBounds( false, "Cached container bounds" );
 LatchedBool g_largemap_shareShaderNames( false, "Shared shader names" );
 LatchedBool g_largemap_poolFaces( false, "Pooled face allocation" );
 LatchedBool g_largemap_fastParse( false, "Fast map parsing" );
+LatchedBool g_largemap_lazyComponents( false, "Vertex editing data on demand" );
 
 /* not latched: these are only ever read when a build command is assembled */
 bool g_largemap_cullGrid = false;
@@ -119,6 +121,20 @@ void LargeMap_constructPreferences( PreferencesPage& page ){
 	    "ever loads oddly, this can be ruled out in one restart."
 	);
 	page.appendCheckBox(
+	    "Editing", "Vertex editing data on demand",
+	    LatchedImportCaller( g_largemap_lazyComponents ),
+	    BoolExportCaller( g_largemap_lazyComponents.m_latched )
+	)->setToolTip(
+	    "Saves memory on maps with many brushes.\n\n"
+	    "Every brush normally carries a selectable handle for each of its edges\n"
+	    "and corners from the moment it loads, whether or not you ever edit its\n"
+	    "shape. This builds them the first time something actually looks at them.\n\n"
+	    "Measured on a 970k brush map: about 600 bytes and five separate\n"
+	    "allocations per brush, so roughly 600 MB.\n\n"
+	    "Cost: the first click into Vertex or Edge mode on a brush does a little\n"
+	    "work that used to be done at load."
+	);
+	page.appendCheckBox(
 	    "Compile", "Gridded CullSides (q3map2 -cullgrid)",
 	    g_largemap_cullGrid
 	)->setToolTip(
@@ -200,6 +216,11 @@ void LargeMap_Construct(){
 	    BoolExportStringCaller( g_largemap_fastParse.m_latched )
 	);
 	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapLazyComponents",
+	    makeBoolStringImportCallback( LatchedAssignCaller( g_largemap_lazyComponents ) ),
+	    BoolExportStringCaller( g_largemap_lazyComponents.m_latched )
+	);
+	GlobalPreferenceSystem().registerPreference(
 	    "LargeMapCullGrid",
 	    BoolImportStringCaller( g_largemap_cullGrid ),
 	    BoolExportStringCaller( g_largemap_cullGrid )
@@ -213,6 +234,7 @@ void LargeMap_Construct(){
 	/* The tokeniser lives in libs/ and cannot see this header, so the latched
 	   value is pushed to it once, here, after preferences have been read. */
 	g_scriptTokeniser_fastPath = g_largemap_fastParse.m_value;
+	g_brush_lazyComponents = g_largemap_lazyComponents.m_value;
 
 	LargeMap_registerPreferencesPage();
 }

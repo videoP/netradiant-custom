@@ -53,6 +53,14 @@
 #include "staticbatch.h"
 #include "brushalloc.h"
 
+/*! rief Mirror of g_largemap_lazyComponents, set by LargeMap_Construct.
+
+    brush.h is included by the contrib plugins, which do not link radiant's
+    preference code, so the LatchedBool itself cannot be named here. Same
+    arrangement as g_scriptTokeniser_fastPath.
+ */
+extern bool g_brush_lazyComponents;
+
 #include "math/frustum.h"
 #include "selectionlib.h"
 #include "render.h"
@@ -1747,6 +1755,20 @@ public:
 		return m_edge_faces;
 	}
 
+	/// rief The unique edges and vertices, for building component instances from.
+	SelectableEdges& selectableEdges(){
+		return m_select_edges;
+	}
+	SelectableVertices& selectableVertices(){
+		return m_select_vertices;
+	}
+	const SelectableEdges& selectableEdges() const {
+		return m_select_edges;
+	}
+	const SelectableVertices& selectableVertices() const {
+		return m_select_vertices;
+	}
+
 	void forEachFace_instanceAttach( MapFile* map ) const {
 		for ( const auto& face : m_faces )
 		{
@@ -3378,9 +3400,11 @@ class BrushInstance :
 	FaceInstances m_faceInstances;
 
 	typedef std::vector<EdgeInstance> EdgeInstances;
-	EdgeInstances m_edgeInstances;
+	EdgeInstances m_edgeInstancesStore;
 	typedef std::vector<VertexInstance> VertexInstances;
-	VertexInstances m_vertexInstances;
+	VertexInstances m_vertexInstancesStore;
+	/// rief Whether the two above are up to date. See buildComponentInstances().
+	mutable bool m_componentsBuilt = false;
 
 	ObservedSelectable m_selectable;
 
@@ -3524,18 +3548,81 @@ public:
 		}
 	}
 
+	/*! rief Builds the edge and vertex instances if they are not there yet.
+
+	    With Vertex editing data on demand switched on, the b-rep build no
+	    longer pushes these - they cost ~600 B and five allocations a brush, and
+	    on a 970k brush map nothing reads them until vertex or edge mode is
+	    entered. They are derived from the brush's own edge and vertex lists, so
+	    building them is cheap and needs no b-rep pass.
+
+	    Every read goes through edgeInstances()/vertexInstances(); the storage is
+	    named apart so that a site which forgets is a compile error rather than
+	    a brush that silently cannot be edited.
+	 */
+	void buildComponentInstances() const {
+		if ( m_componentsBuilt ) {
+			return;
+		}
+		m_componentsBuilt = true;
+
+		if ( !g_brush_lazyComponents ) {
+			return; // the b-rep build already pushed them
+		}
+
+		BrushInstance& self = const_cast<BrushInstance&>( *this );
+		self.m_edgeInstancesStore.clear();
+		self.m_edgeInstancesStore.reserve( m_brush.selectableEdges().size() );
+		for ( SelectableEdge& edge : self.m_brush.selectableEdges() )
+		{
+			self.m_edgeInstancesStore.push_back( EdgeInstance( self.m_faceInstances, edge ) );
+		}
+
+		self.m_vertexInstancesStore.clear();
+		self.m_vertexInstancesStore.reserve( m_brush.selectableVertices().size() );
+		for ( SelectableVertex& vertex : self.m_brush.selectableVertices() )
+		{
+			self.m_vertexInstancesStore.push_back( VertexInstance( self.m_faceInstances, vertex ) );
+		}
+	}
+
+	EdgeInstances& edgeInstances(){
+		buildComponentInstances();
+		return m_edgeInstancesStore;
+	}
+	const EdgeInstances& edgeInstances() const {
+		buildComponentInstances();
+		return m_edgeInstancesStore;
+	}
+	VertexInstances& vertexInstances(){
+		buildComponentInstances();
+		return m_vertexInstancesStore;
+	}
+	const VertexInstances& vertexInstances() const {
+		buildComponentInstances();
+		return m_vertexInstancesStore;
+	}
+
 	void edge_clear() override {
-		m_edgeInstances.clear();
+		m_edgeInstancesStore.clear();
+		m_componentsBuilt = false;
 	}
 	void edge_push_back( SelectableEdge& edge ) override {
-		m_edgeInstances.push_back( EdgeInstance( m_faceInstances, edge ) );
+		if ( g_brush_lazyComponents ) {
+			return; // built from the brush's edge list when something asks
+		}
+		m_edgeInstancesStore.push_back( EdgeInstance( m_faceInstances, edge ) );
 	}
 
 	void vertex_clear() override {
-		m_vertexInstances.clear();
+		m_vertexInstancesStore.clear();
+		m_componentsBuilt = false;
 	}
 	void vertex_push_back( SelectableVertex& vertex ) override {
-		m_vertexInstances.push_back( VertexInstance( m_faceInstances, vertex ) );
+		if ( g_brush_lazyComponents ) {
+			return; // built from the brush's vertex list when something asks
+		}
+		m_vertexInstancesStore.push_back( VertexInstance( m_faceInstances, vertex ) );
 	}
 
 	void vertex_select() override {
@@ -3544,17 +3631,17 @@ public:
 		for( const auto& v : m_brush.m_vertexModeVertices )
 			if( v.m_selected ){
 				src_selected = true;
-				for( auto& i : m_vertexInstances )
+				for( auto& i : vertexInstances() )
 					dst_selected |= i.vertex_select( v.m_vertexTransformed );
 			}
-		if( src_selected && !dst_selected && !m_vertexInstances.empty() )
-			m_vertexInstances[0].setSelected( true ); //select at least something to prevent transform interruption after removing all selected vertices during vertexModeTransform
+		if( src_selected && !dst_selected && !vertexInstances().empty() )
+			vertexInstances()[0].setSelected( true ); //select at least something to prevent transform interruption after removing all selected vertices during vertexModeTransform
 	}
 
 	void vertex_snap( const float snap, bool all ){
 		m_brush.vertexModeInit();
-		m_brush.m_vertexModeVertices.reserve( m_vertexInstances.size() );
-		for ( const auto& i : m_vertexInstances ){
+		m_brush.m_vertexModeVertices.reserve( vertexInstances().size() );
+		for ( const auto& i : vertexInstances() ){
 			i.gather( m_brush.m_vertexModeVertices );
 		}
 		m_brush.vertexModeSnap( snap, all );
@@ -3745,7 +3832,7 @@ public:
 		{
 		case SelectionSystem::eVertex:
 			{
-				for ( auto& vi : m_vertexInstances )
+				for ( auto& vi : vertexInstances() )
 				{
 					vi.testSelect( selector, test );
 				}
@@ -3753,7 +3840,7 @@ public:
 			break;
 		case SelectionSystem::eEdge:
 			{
-				for ( auto& ei : m_edgeInstances )
+				for ( auto& ei : edgeInstances() )
 				{
 					ei.testSelect( selector, test );
 				}
@@ -3788,7 +3875,7 @@ public:
 		{
 		case SelectionSystem::eVertex:
 			{
-				for ( const VertexInstance& i : m_vertexInstances )
+				for ( const VertexInstance& i : vertexInstances() )
 				{
 					i.gatherComponentsHighlight( polygons, intersection, test );
 				}
@@ -3796,7 +3883,7 @@ public:
 			break;
 		case SelectionSystem::eEdge:
 			{
-				for ( const EdgeInstance& i : m_edgeInstances )
+				for ( const EdgeInstance& i : edgeInstances() )
 				{
 					i.gatherComponentsHighlight( polygons, intersection, test );
 				}
@@ -3852,7 +3939,7 @@ public:
 		{
 		case SelectionSystem::eVertex:
 			{
-				for ( auto& vi : m_vertexInstances )
+				for ( auto& vi : vertexInstances() )
 				{
 					vi.setSelected( !vi.isSelected() );
 				}
@@ -3860,7 +3947,7 @@ public:
 			break;
 		case SelectionSystem::eEdge:
 			{
-				for ( auto& ei : m_edgeInstances )
+				for ( auto& ei : edgeInstances() )
 				{
 					ei.setSelected( !ei.isSelected() );
 				}
@@ -3936,7 +4023,7 @@ public:
 	void bestPlaneIndirect( SelectionTest& test, BestPlaneData& planeData ) const override {
 		test.BeginMesh( localToWorld() );
 		float dot = 1;
-		for ( const EdgeInstance& ei : m_edgeInstances )
+		for ( const EdgeInstance& ei : edgeInstances() )
 		{
 			ei.bestPlaneIndirect( test, planeData, dot );
 		}
@@ -3964,7 +4051,7 @@ public:
 	void selectVerticesOnPlane( const Plane3& plane ){
 		for ( FaceInstance& fi : m_faceInstances )
 			if( plane3_equal( plane, fi.getFace().plane3() ) || plane3_equal( plane, plane3_flipped( fi.getFace().plane3() ) ) )
-				for ( VertexInstance& vi : m_vertexInstances )
+				for ( VertexInstance& vi : vertexInstances() )
 					vi.selectVerticesOfFace( fi );
 	}
 
@@ -3988,10 +4075,10 @@ public:
 	}
 
 	void insert_vertices( const Brush::VertexModeVertices& vertexModeVertices ){
-		if( !m_vertexInstances.empty() ){
+		if( !vertexInstances().empty() ){
 			m_brush.vertexModeInit();
-			m_brush.m_vertexModeVertices.reserve( m_vertexInstances.size() + 2 );
-			for ( const auto& i : m_vertexInstances ){
+			m_brush.m_vertexModeVertices.reserve( vertexInstances().size() + 2 );
+			for ( const auto& i : vertexInstances() ){
 				i.gather( m_brush.m_vertexModeVertices );
 			}
 			for ( const auto& i : vertexModeVertices ){
@@ -4007,11 +4094,11 @@ public:
 	}
 
 	void remove_vertices(){
-		if( !m_vertexInstances.empty() ){
+		if( !vertexInstances().empty() ){
 			m_brush.vertexModeInit();
 			Brush::VertexModeVertices v;
-			v.reserve( m_vertexInstances.size() );
-			for ( const auto& i : m_vertexInstances ){
+			v.reserve( vertexInstances().size() );
+			for ( const auto& i : vertexInstances() ){
 				i.gather( v );
 				if( v.back().m_selected )
 					v.pop_back();
@@ -4058,8 +4145,8 @@ public:
 				for ( const auto& i : m_faceInstances ){
 					if( i.selectedComponents( SelectionSystem::eVertex ) ){
 						m_brush.vertexModeInit();
-						m_brush.m_vertexModeVertices.reserve( m_vertexInstances.size() );
-						for ( const auto& i : m_vertexInstances ){
+						m_brush.m_vertexModeVertices.reserve( vertexInstances().size() );
+						for ( const auto& i : vertexInstances() ){
 							i.gather( m_brush.m_vertexModeVertices );
 						}
 						break;

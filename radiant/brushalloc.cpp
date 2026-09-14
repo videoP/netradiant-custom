@@ -61,6 +61,10 @@ std::size_t g_slotsUsed = 0;
 } // namespace
 
 
+/* Declared in brush.h; see the comment there. */
+bool g_brush_lazyComponents = false;
+
+
 const char* ShaderName_store( const char* name ){
 	if ( !g_largemap_shareShaderNames.m_value ) {
 		return string_clone( name );
