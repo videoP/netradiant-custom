@@ -1248,7 +1248,7 @@ void CSG_Intersect(){
 			}
 
 	if ( !ultimate_brush->hasContributingFaces() ) {
-		globalWarningStream() << "CSG Intesect: Failed - result would not be convex.\n";
+		globalWarningStream() << "CSG Intersect: Failed - result would not be convex.\n";
 		GlobalSceneGraph().traverse( BrushDeleteSelected() );
 	}
 	else

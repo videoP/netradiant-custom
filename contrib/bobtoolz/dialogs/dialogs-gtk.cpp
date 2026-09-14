@@ -284,7 +284,7 @@ bool DoDoorsBox( DoorRS* rs ){
 		}
 		{
 			form->addRow( "Orientation", radioNS = new QRadioButton( "North - South" ) );
-			form->addRow( "", radioEW = new QRadioButton( "North - South" ) );
+			form->addRow( "", radioEW = new QRadioButton( "East - West" ) );
 			radioNS->setChecked( true );
 		}
 		{
@@ -590,7 +590,7 @@ EMessageBoxReturn DoPathPlotterBox( PathPlotterRS* rs ){
 		}
 		{
 			auto *spin = spin_mult = new DoubleSpinBox( 1, 10, 3 );
-			form->addRow( new SpinBoxLabel( "Distance Multipler", spin ), spin );
+			form->addRow( new SpinBoxLabel( "Distance Multiplier", spin ), spin );
 			spin->setToolTip( "Path Distance = dist(start -> apex) * multiplier" );
 		}
 		{

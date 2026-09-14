@@ -1169,6 +1169,7 @@ misc...
 	* .crn image format support
 	* .dpk .dpkdir game archives support
 	* .webp image format support
+	* GreyBlue2, BlenderDark, BlenderLight GUI themes by @julius2k26
 
 
 

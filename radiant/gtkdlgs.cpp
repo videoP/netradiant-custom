@@ -493,7 +493,7 @@ void DoInstallDevFilesDlg( const char *enginePath ){
 		{
 			auto *box = new QVBoxLayout( &dialog );
 			{
-				auto *label = new QLabel( "Would you like to install following files recommended for fluent map development\nto " + QString::fromStdString( targetBase.string() ) + "?" );
+				auto *label = new QLabel( "Would you like to install the following files recommended for fluent map development\nto " + QString::fromStdString( targetBase.string() ) + "?" );
 				label->setAlignment( Qt::AlignmentFlag::AlignHCenter );
 				box->addWidget( label );
 			}

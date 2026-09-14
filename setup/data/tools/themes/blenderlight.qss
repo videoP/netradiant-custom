@@ -1,0 +1,2312 @@
+/* ----------------------------------------------------------------------------
+
+     NAME: "BlenderLight" Style Sheet
+  VERSION: 1.1
+  LICENSE: GPL v2
+
+    ABOUT: This is a Qt style sheet for "NetRadiant-Custom" application.
+
+   AUTHOR: Julius aka Julio César (juliocesar2k7@gmail.com)
+     DATE: Started in September 2025
+
+ ---------------------------------------------------------------------------- */
+
+/* ---- ALL WIDGETS -----------------------------------------------------------
+|                                                                              |
+|  This RESETS the properties of ALL Widgets                                   |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+/*
+* {
+    background: none;
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    outline: none;
+    padding: 0px;
+
+    spacing: 0px;
+}
+*/
+
+/* ---- QWidget (Container) ---------------------------------------------------
+|                                                                              |
+|   Inheritance: none                                                          |
+|                                                                              |
+|  Inherited by: ALL Widgets                                                   |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QWidget {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: rgb( 179, 179, 179 );       /* Main BKGR */
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+}
+
+/* ---- QFrame (Container) ----------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QFrame                                             |
+|                                                                              |
+|  Inherited by: QLabel, QSplitter, QStackedWidget                             |
+|                QAbstractScrollArea (QScrollArea, QPlainTextEdit)             |
+|                QAbstractItemView (QHeaderView, QListView, QTreeView)         |
+|                plus some other widgets not themed here.                      |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+/* QFrame as separator (HLine frameShape) */
+
+.QFrame {
+    background: transparent;
+    margin: 0px;
+    border-top: 2px dashed rgba( 77, 77, 77, 50% );   /* Disabled BORDER */
+    border-radius: 0px;
+    padding: 0px;
+}
+
+/* ---- QToolTip (Container) --------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QToolTip (QToolTip is a QFrame)                    |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QToolTip {
+    color: rgb( 230, 230, 230 );            /* Light TEXT */
+    background: rgb( 25, 25, 25 );          /* ToolTip BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 15, 15, 15 );    /* ToolTip BORDER */
+    border-radius: 0px;
+    padding: 0px 0px;
+
+    opacity: 240;
+ /* font-style: italic; */
+}
+
+/* ---- QLabel (Display) ------------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QFrame => QLabel                                   |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QLabel {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: transparent;
+    margin:0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+}
+
+QLabel::disabled {
+    color: rgba( 26, 26, 26, 50% );         /* Disabled TEXT */
+}
+
+/* ---- QDialog + QMessageBox + QDialogButtonBox (Container) ------------------
+|                                                                              |
+|   Inheritance: QWidget => QDialog                                            |
+|                QWidget => QDialog => QMessageBox                             |
+|                QWidget => QDialogButtonBox                                   |
+|                                                                              |
+|   NOTE: Button Layout: 0=Windows, 1=MacOS, 2=KDE, 3=GNOME, 5=Android         |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+/* Used in: Preferences BKGR, Surface Inspector, TexBro (Find/Replace),
+            Map Info, File Selector, etc. */
+
+QDialog {
+    background: rgb( 179, 179, 179 );       /* Main BKGR */
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+}
+
+/* Used in: Open Map (warning) and other message windows */
+
+QMessageBox {
+    background: rgb( 204, 204, 204 );       /* Light BKGR */
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+}
+
+/* Used in: Windows with standard buttons (OK, CANCEL, etc.) */
+
+QDialogButtonBox {
+    dialogbuttonbox-buttons-have-icons: 0;  /* remove Icons */
+ /* button-layout: 0; */                    /* Windows layout */
+}
+
+/* ---- QGroupBox (Container) -------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QGroupBox                                          |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+/* Used in: Preferences (right panel), SI (buttons zone), About window,
+            Buil Menu (Editor), Plugins (many of them) */
+
+QGroupBox {
+    background: rgb( 204, 204, 204 );            /* Light BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );         /* Main BORDER */
+    border-radius: 4px;
+    padding: 2px; /* space around [Content] */
+
+    outline: none; /* visible in focused [Title] */
+
+    margin-top: 25px; /* 1.10em; */ /* add space for [Title] */
+}
+
+QGroupBox:off, QGroupBox:disabled {
+    border-color: rgba( 77, 77, 77, 50% );       /* Disabled BORDER */
+}
+
+/* -- Title -- */
+
+QGroupBox::title {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+    background: transparent;
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px; /* space around [Indicator+Text] */
+
+    subcontrol-origin: margin;            /* margin, border, PADDING, content */
+    subcontrol-position: top left;        /* top, bottom, left, right, center */
+
+    spacing: 2px; /* space between [Indicator] & [Text] */
+}
+
+QGroupBox::title:hover {
+ /* placeholder */
+}
+
+QGroupBox::title:disabled {
+    color: rgba( 26, 26, 26, 50% );              /* Disabled TEXT */
+}
+
+/* -- CheckBox -- */
+
+QGroupBox::indicator {
+    background: none;
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+
+    width: 20px;
+    height: 20px;
+}
+
+QGroupBox::indicator:checked {
+    image: url(julius:themes/blenderlight/checkbox_checked.svg);
+}
+
+QGroupBox::indicator:checked:hover {
+    image: url(julius:themes/blenderlight/checkbox_checked_selected.svg);
+}
+
+QGroupBox::indicator:checked:pressed {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_selected.svg);
+}
+
+QGroupBox::indicator:checked:disabled {
+    image: url(julius:themes/blenderlight/checkbox_checked_disabled.svg);
+}
+
+QGroupBox::indicator:unchecked {
+    image: url(julius:themes/blenderlight/checkbox_unchecked.svg);
+}
+
+QGroupBox::indicator:unchecked:hover {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_selected.svg);
+}
+
+QGroupBox::indicator:unchecked:pressed {
+    image: url(julius:themes/blenderlight/checkbox_checked_selected.svg);
+}
+
+QGroupBox::indicator:unchecked:disabled {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_disabled.svg);
+}
+
+/* ---- QMainWindow (Layout) --------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QMainWindow                                        |
+|                                                                              |
+|                                                                              |
+|    - Main widgets layout of NRC is this:                                     |
+|                                                                              |
+|       QMainWindow + QMenuBar + QMenu + QToolBar + QStatusBar + QSplitter     |
+|                                                                              |
+|    - BKGR of QMainWindow is visible in layout2 (floating windows). Its color |
+|      is inherited by QSplitter & QStatusBar if not set there. It is also     |
+|      visible in the corners of the Console.                                  |
+|                                                                              |
+|    - ToolBar's Icon size can be set here (overriding system size).           |
+|                                                                              |
+|       It doesn't work for TexBro & ModelBro ToolBars because they are not    |
+|       children of QMainWindow (they are QSplitter's children).               |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QMainWindow {
+    background: rgb( 179, 179, 179 );       /* Main BKGR */
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+
+ /* icon-size: 24px 24px; */
+}
+
+/* ---- QMenuBar --------------------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QMenuBar                                           |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QMenuBar {
+    background: rgb( 153, 153, 153 );            /* Dark BKGR */
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+
+    spacing: 2px; /* space between [Items] */
+}
+
+QMenuBar::item {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+    background: transparent;
+    margin: 2px 0px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 0px 6px; /* space around [Text] */
+
+    padding-bottom: 1px;
+}
+
+QMenuBar::item:selected, QMenuBar::item:pressed {
+    color: rgb( 255, 255, 255 );                 /* Selected TEXT */
+    background: rgb( 86, 128, 194 );             /* Main BLUE */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QMenuBar::item:disabled {
+    color: rgba( 26, 26, 26, 50% );              /* Disabled TEXT */
+}
+
+/* ---- QMenu -----------------------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QMenu                                              |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QMenu {
+ /* qproperty-separatorsCollapsible: 0; */
+ /* qproperty-toolTipsVisible: 0; */
+}
+
+QMenu {
+    background: rgb( 192, 192, 192 );            /* Menu BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 166, 166, 166 );      /* Menu BORDER */
+    border-radius: 0px;
+    padding: 4px; /* space around [Content] */
+
+    menu-scrollable: 1; /* enable Overflow Scroller */
+}
+
+QMenu::separator {
+    background: rgb( 172, 172, 172 );            /* Menu SEPARATOR */
+    margin: 2px 6px;
+    height: 1px;
+}
+
+QMainWindow > QMenu {
+    menu-scrollable: 0; /* disable Scroller for ToolBar right-click menu */
+}
+
+/* -- Item -- */
+
+QMenu::item {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+    background: transparent;
+    margin: 1px 0px; /* space around [Item] rows */
+    border: none;
+    border-radius: 4px;
+
+    padding: 0px 20px 1px 11px; /* space around [Text+Mnemonic] */
+
+    /* NOTE: Added extra space for Icon & Arrow */
+}
+
+QMenu::item:selected {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgb( 26, 26, 26 );          /* Menu Selected BKGR */
+}
+
+QMenu::item:disabled {
+    color: rgba( 26, 26, 26, 50% );         /* Disabled TEXT */
+
+    font-style: italic;
+}
+
+/* -- Icon -- */
+
+QMenu::icon {
+    background: rgba( 255, 255, 255, 35% ); /* WHITE + Alpha */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );    /* Main BORDER */
+    border-radius: 2px;
+    padding: 1px; /* space around [Icon] */
+
+    position: absolute;
+    left: 6px;
+
+    /* NOTE: QMenu Icon size is not adjustable from stylesheet */
+}
+
+QMenu::icon:checked {
+    background: rgb( 255, 255, 255 );       /* WHITE */
+    border-color: rgb( 89, 89, 89 );        /* Main BORDER (hover) */
+}
+
+QMenu::icon:!checked:selected {
+    background: rgba( 255, 255, 255, 83% ); /* WHITE + Alpha */
+    border-color: rgb( 77, 77, 77 );        /* Main BORDER */
+}
+
+QMenu::icon:checked:selected {
+    background: rgb( 255, 255, 255 );       /* WHITE */
+    border-color: rgb( 89, 89, 89 );        /* Main BORDER (hover) */
+}
+
+QMenu::icon:!checked:pressed {
+    background: rgb( 255, 255, 255 );       /* WHITE */
+    border-color: rgb( 89, 89, 89 );        /* Main BORDER (hover) */
+}
+
+QMenu::icon:checked:pressed {
+    background: rgba( 255, 255, 255, 83% ); /* WHITE + Alpha */
+    border-color: rgb( 77, 77, 77 );        /* Main BORDER */
+}
+
+/* -- Arrow -- */
+
+QMenu::right-arrow {
+    image: url(julius:themes/blenderlight/arrow_right.svg);
+
+    width: 16px;  /* width: 0.70em; */
+    height: 16px; /* height: 0.70em; */
+
+    position: absolute;
+    right: 2px;
+}
+
+QMenu::right-arrow:selected {
+    image: url(julius:themes/blenderlight/arrow_right_selected.svg);
+}
+
+/* -- Indicator -- */
+
+QMenu::indicator {
+    width: 20px;  /* width: 0.85em; */
+    height: 20px; /* height: 0.85em; */
+
+    position: absolute;
+    left: 6px;
+
+    /* NOTE: Larger size (24px) is causing Text misaligning */
+}
+
+/* CheckBox */
+
+QMenu::indicator:non-exclusive:checked {
+    image: url(julius:themes/blenderlight/checkbox_checked.svg);
+}
+
+QMenu::indicator:non-exclusive:checked:selected {
+    image: url(julius:themes/blenderlight/checkbox_checked_selected.svg);
+}
+
+QMenu::indicator:non-exclusive:checked:pressed {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_selected.svg);
+}
+
+QMenu::indicator:non-exclusive:checked:disabled {
+    image: url(julius:themes/blenderlight/checkbox_checked_disabled.svg);
+}
+
+QMenu::indicator:non-exclusive:unchecked {
+    image: url(julius:themes/blenderlight/checkbox_unchecked.svg);
+}
+
+QMenu::indicator:non-exclusive:unchecked:selected {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_selected.svg);
+}
+
+QMenu::indicator:non-exclusive:unchecked:pressed {
+    image: url(julius:themes/blenderlight/checkbox_checked_selected.svg);
+}
+
+QMenu::indicator:non-exclusive:unchecked:disabled {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_disabled.svg);
+}
+
+/* RadioButton */
+
+QMenu::indicator:exclusive:checked {
+    image: url(julius:themes/blenderlight/radiobutton_checked.svg);
+}
+
+QMenu::indicator:exclusive:checked:selected {
+    image: url(julius:themes/blenderlight/radiobutton_checked_selected.svg);
+}
+
+QMenu::indicator:exclusive:checked:pressed {
+    image: url(julius:themes/blenderlight/radiobutton_checked.svg);
+}
+
+QMenu::indicator:exclusive:checked:disabled {
+    image: url(julius:themes/blenderlight/radiobutton_checked_disabled.svg);
+}
+
+QMenu::indicator:exclusive:unchecked {
+    image: url(julius:themes/blenderlight/radiobutton_unchecked.svg);
+}
+
+QMenu::indicator:exclusive:unchecked:selected {
+    image: url(julius:themes/blenderlight/radiobutton_unchecked_selected.svg);
+}
+
+QMenu::indicator:exclusive:unchecked:pressed {
+    image: url(julius:themes/blenderlight/radiobutton_checked_selected.svg);
+}
+
+QMenu::indicator:exclusive:unchecked:disabled {
+    image: url(julius:themes/blenderlight/radiobutton_unchecked_disabled.svg);
+}
+
+/* -- Tear Off -- */
+
+QMenu::tearoff  {
+    background: transparent;
+    margin: 2px 5px 3px 5px;
+    border-top: 2px dashed rgb( 172, 172, 172 ); /* like Menu SEPARATOR */
+
+    height: 2px;
+}
+
+QMenu::tearoff:selected {
+    border-color: rgb( 97, 97, 97 );             /* like Menu Arrow */
+}
+
+/* -- Scroller -- */
+
+/* This sub-control has no pseudo-states (hover, etc.) */
+
+QMenu::scroller {
+    background: transparent;
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+
+    margin-top: 4px;
+
+    image: url(julius:themes/blenderlight/menu_more.svg);
+
+    height: 8px;
+}
+
+/* -- Trickery for ToolBar right-click menu -- */
+
+/* Problem: after pressing an item, the "selected" state looks like inverting
+   checked/unchecked states.
+
+   Solution: removing "pressed" state or prioritizing "selected" over it
+   (by stylesheet order), so that "pressed" state will never be displayed. */
+
+QMainWindow > QMenu::icon:!checked:selected {
+    background: rgba( 255, 255, 255, 83% );      /* WHITE + Alpha */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QMainWindow > QMenu::icon:checked:selected {
+    background: rgb( 255, 255, 255 );            /* WHITE */
+    border-color: rgb( 89, 89, 89 );             /* Main BORDER (hover) */
+}
+
+QMainWindow > QMenu::indicator:non-exclusive:checked:selected {
+    image: url(julius:themes/blenderlight/checkbox_checked_selected.svg);
+}
+
+QMainWindow > QMenu::indicator:non-exclusive:unchecked:selected {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_selected.svg);
+}
+
+/* ---- QToolBar (Container) + QToolButton (Buttons) --------------------------
+|                                                                              |
+|   Inheritance: QWidget => QToolBar                                           |
+|                QWidget => QAbstractButton => QToolButton                     |
+|                                                                              |
+|                                                                              |
+|   - qproperty-iconSize: 32px;                                                |
+|                                                                              |
+|      This will affect all ToolBars and will also propagate to all Themes,    |
+|      so it is better to set it in QMainWindow (icon-size: 32px)              |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QMainWindow {
+    icon-size: 24px 24px;
+}
+
+/* ---- QToolBar ---- */
+
+QToolBar {
+    background: rgb( 179, 179, 179 );       /* Main BKGR */
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 4px; /* space around [Content] */
+
+    spacing: 1px; /* space between [Buttons] */
+}
+
+QToolBar::separator:horizontal {
+    background: transparent;
+    width: 8px;
+}
+
+QToolBar::separator:vertical {
+    background: transparent;
+    height: 8px;
+}
+
+QToolBar::handle:horizontal {
+    image: url(julius:themes/blenderlight/toolbar_handle_vert.svg);
+    padding-right: 2px; /* a bit of separation */
+
+    width: 8px;
+}
+
+QToolBar::handle:vertical {
+    image: url(julius:themes/blenderlight/toolbar_handle_horiz.svg);
+    padding-bottom: 2px; /* a bit of separation */
+
+    height: 8px;
+}
+
+/* ---- QToolButton ---- */
+
+QToolBar QToolButton {
+    background: rgb( 219, 219, 219 );            /* Button BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );
+    border-radius: 2px;
+
+    padding: 3px; /* space around [Icon] */
+}
+
+QToolBar QToolButton:hover {
+    background: rgb( 241, 241, 241 );            /* Button BKGR (hover) */
+    border-color: rgb( 89, 89, 89 );             /* Main BORDER (hover) */
+}
+
+QToolBar QToolButton:pressed {
+    background: rgb( 219, 219, 219 );            /* Button BKGR */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QToolBar QToolButton:on {
+    background: rgb( 255, 255, 255 );            /* WHITE */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QToolBar QToolButton:on:hover {
+    background: rgb( 255, 255, 255 );            /* WHITE */
+    border-color: rgb( 89, 89, 89 );             /* Main BORDER (hover) */
+}
+
+QToolBar QToolButton:on:pressed {
+    background: rgb( 219, 219, 219 );            /* Button BKGR */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QToolBar QToolButton:disabled {
+    background: rgba( 0, 0, 0, 10% );            /* BLACK + Alpha */
+    border-color: transparent;
+}
+
+/* Secondary ToolBar (TexBro & ModelBro) */
+
+QSplitter QToolBar {
+    padding: 2px; /* half size of main ToolBar */
+}
+
+QSplitter QToolBar QToolButton {
+ /* placeholder */
+}
+
+/* ---- QStatusBar (Container) ------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QStatusBar                                         |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QStatusBar {
+    background: rgb( 153, 153, 153 );       /* Dark BKGR */
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+
+ /* min-height: 28px; */
+}
+
+QStatusBar .QWidget { /* this is Icons zone */
+    background: transparent;
+}
+
+QStatusBar QLabel {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+}
+
+/* ---- QSplitter (Container) -------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QFrame => QSplitter                                |
+|                                                                              |
+|                                                                              |
+|    - Keep in mind that QSplitter supports any property such as margin,       |
+|      border, padding, etc., so I set all of them to zero.                    |
+|                                                                              |
+|      The handle is simply a visible sub-control of this widget. In fact, the |
+|      handle is the whole separator bar.                                      |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QSplitter {
+    background: transparent;
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+}
+
+QSplitter::handle:horizontal {
+    background: rgb( 179, 179, 179 );            /* Main BKGR */
+    image: url(julius:themes/blenderlight/splitter_handle_vert.svg);
+
+    width: 4px;
+}
+
+QSplitter::handle:vertical {
+    background: rgb( 179, 179, 179 );            /* Main BKGR */
+    image: url(julius:themes/blenderlight/splitter_handle_horiz.svg);
+
+    height: 4px;
+}
+
+/* ---- QTabWidget (Container) (+ QTabBar + QStackedWidget)--------------------
+|                                                                              |
+|   Inheritance: QWidget => QTabWidget                                         |
+|                        => QTabBar                                            |
+|                                                                              |
+|                QWidget => QFrame => QStackedWidget                           |
+|                                                                              |
+|   NOTE: Most of the functionality in QTabWidget is provided by a QTabBar     |
+|         (at the top, providing the tabs) and a QStackedWidget (most of the   |
+|         area, organizing the individual pages).                              |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+/* Used in: EI, TexBro, Plugins (bobToolz) */
+
+QTabWidget {
+    qproperty-documentMode: 0;         /* 0 = render the widget frame */
+    qproperty-elideMode: ElideNone;    /* ElideLeft | ElideRight | ElideMiddle | ElideNone */
+    qproperty-movable: 1;              /* drag and reorganize individual Tabs */
+    qproperty-tabBarAutoHide: 1;       /* Tab Bar hidden if less than 2 Tabs */
+    qproperty-usesScrollButtons: 0;    /* don't show overflow buttons */
+}
+
+/* Full widget frame (EI) */
+
+QTabWidget::pane:bottom {
+    background: rgb( 179, 179, 179 );       /* Main BKGR */
+    margin: 2px;
+    border: 1px solid rgb( 77, 77, 77 );    /* Main BORDER */
+    border-radius: 4px;
+    padding: 2px;
+
+    border-bottom-left-radius: 0px;
+}
+
+/* Full widget frame (TexBro) */
+
+QTabWidget::pane:top {
+    background: rgb( 179, 179, 179 );       /* Main BKGR */
+    margin: 2px;
+    border: 1px solid rgb( 77, 77, 77 );    /* Main BORDER */
+    border-radius: 4px;
+    padding: 2px;
+
+    border-top-left-radius: 0px;
+}
+
+/* Tabs Bar position (EI) */
+
+QTabWidget::tab-bar:bottom {
+    subcontrol-position: left center;
+
+    left: 2px;
+    bottom: 3px; /* move it up */
+}
+
+/* Tabs Bar position (TexBro) */
+
+QTabWidget::tab-bar:top {
+    subcontrol-position: left center;
+
+    left: 2px;
+    top: 3px; /* move it down */
+}
+
+/* ---- Tabs ---- */
+
+QTabBar {
+    background: rgb( 179, 179, 179 );       /* Main BKGR */
+}
+
+/* -- EI -- */
+
+QTabBar::tab:bottom {
+    color: rgba( 26, 26, 26, 50% );              /* Disabled TEXT */
+    background: rgb( 153, 153, 153 );            /* Dark BKGR */
+    margin: 0px 0px; /* space around [Tabs] */
+    border: 1px solid rgb( 77, 77, 77 );         /* Main BORDER */
+    border-radius: 0px;
+    padding: 0px 8px; /* space around [Text] */
+
+    border-bottom-left-radius: 4px;
+    border-bottom-right-radius: 4px;
+
+    margin-bottom: 4px;
+
+    min-width: 2em; /* set a minimum size */
+}
+
+QTabBar::tab:bottom:hover {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+}
+
+QTabBar::tab:bottom:selected {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+
+    /* Main BKGR, Main BLUE */
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 rgb( 179, 179, 179 ), stop:0.88 rgb( 179, 179, 179 ),
+                stop:0.89 rgb( 86, 128, 194 ));
+
+    border-top-color: transparent;
+
+    margin-bottom: 0px;
+}
+
+/* -- TexBro -- */
+
+QTabBar::tab:top {
+    color: rgba( 26, 26, 26, 50% );              /* Disabled TEXT */
+    background: rgb( 153, 153, 153 );            /* Dark BKGR */
+    margin: 0px 0px; /* space around [Tabs] */
+    border: 1px solid rgb( 77, 77, 77 );         /* Main BORDER */
+    border-radius: 0px;
+    padding: 0px 8px; /* space around [Text] */
+
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+
+    margin-top: 4px;
+
+    min-width: 2em; /* set a minimum size */
+}
+
+QTabBar::tab:top:hover {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+}
+
+QTabBar::tab:top:selected {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+
+    /* Main BLUE, Main BKGR */
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 rgb( 86, 128, 194 ), stop:0.12 rgb( 86, 128, 194 ),
+                stop:0.13 rgb( 179, 179, 179 ));
+
+    border-bottom-color: transparent;
+
+    margin-top: 0px;
+}
+
+/* ---- QScrollArea (Container) + QPlainTextEdit (Input) ----------------------
+|                                                                              |
+|   Inheritance: QWidget => QFrame => QAbstractScrollArea => QScrollArea       |
+|                                                         => QPlainTextEdit    |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+/* ---- QAbstractScrollArea ---- */
+
+/* This is where vert & horiz ScrollBars meet */
+
+QAbstractScrollArea::corner {
+    background: none;
+    margin: 0px;
+    border: none;
+    padding: 0px;
+}
+
+/* ---- QScrollArea ---- */
+
+/* Used in: EI (4th panel) */
+
+QScrollArea {
+    background: rgb( 204, 204, 204 );                 /* Light BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );              /* Main BORDER */
+    border-radius: 4px;
+    padding: 2px; /* space around [Content+ScrollBar] */
+}
+
+QScrollArea:hover {
+    border-color: rgb( 100, 160, 255 );               /* BLUE 2 */
+}
+
+/* There is a QWidget in top of QScrollArea */
+
+QScrollArea .QWidget {
+    background: transparent;
+}
+
+/* ---- QPlainTextEdit ---- */
+
+/* Used in: EI (2nd panel), Console, About window */
+
+QPlainTextEdit {
+    color: rgb( 26, 26, 26 );                         /* Main TEXT */
+    background: rgb( 204, 204, 204 );                 /* Light BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );              /* Main BORDER */
+    border-radius: 4px;
+    padding: 2px; /* space around [Content+ScrollBar] */
+
+    selection-color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    selection-background-color: rgb( 86, 128, 194 );  /* Main BLUE */
+}
+
+QPlainTextEdit:hover {
+    border-color: rgb( 100, 160, 255 );               /* BLUE 2 */
+}
+
+QPlainTextEdit:!active {
+    selection-color: rgb( 230, 230, 230 );            /* Light TEXT */
+    selection-background-color: rgba( 0, 0, 0, 25% ); /* BLACK + Alpha */
+}
+
+/* ---- QHeaderView + QListView + QTableView + QTreeView (Item Views) ---------
+|                                                                              |
+|   Inheritance:                                                               |
+|                                                                              |
+| QWidget => QFrame => QAbstractScrollArea => QAbstractItemView => QHeaderView |
+|                                                               => QListView   |
+|                                                               => QTableView  |
+|                                                               => QTreeView   |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+/* ---- QAbstractItemView ---- */
+
+QAbstractItemView {
+    qproperty-alternatingRowColors: 0;
+ /* qproperty-iconSize: 16px; */
+
+    paint-alternating-row-colors-for-empty-area: 0;
+    alternate-background-color: rgb( 198, 198, 198 ); /* Light BKGR -6 */
+}
+
+/* -- Indicator -- */
+
+QAbstractItemView::indicator {
+    background: none;
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+
+    width: 20px;  /* width: 0.85em; */
+    height: 20px; /* height: 0.85em; */
+}
+
+QAbstractItemView::indicator:checked {
+    image: url(julius:themes/blenderlight/checkbox_checked.svg);
+}
+
+QAbstractItemView::indicator:checked:selected {
+    image: url(julius:themes/blenderlight/checkbox_checked_selected.svg);
+}
+
+QAbstractItemView::indicator:checked:pressed {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_selected.svg);
+}
+
+QAbstractItemView::indicator:checked:disabled {
+    image: url(julius:themes/blenderlight/checkbox_checked_disabled.svg);
+}
+
+QAbstractItemView::indicator:unchecked {
+    image: url(julius:themes/blenderlight/checkbox_unchecked.svg);
+}
+
+QAbstractItemView::indicator:unchecked:selected {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_selected.svg);
+}
+
+QAbstractItemView::indicator:unchecked:pressed {
+    image: url(julius:themes/blenderlight/checkbox_checked_selected.svg);
+}
+
+QAbstractItemView::indicator:unchecked:disabled {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_disabled.svg);
+}
+
+/* ---- QHeaderView ---- */
+
+/* Used in: Map Info, File Selector (right panel), bobToolz "Vis Viewer"
+   plugin */
+
+/* This is the full Header row */
+
+QHeaderView {
+    background: transparent;
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+}
+
+/* -- Sections (Individual parts) -- */
+
+QHeaderView::section {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: rgb( 219, 219, 219 );       /* Button BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );    /* Main BORDER */
+    border-radius: 0px;
+    padding: 0px;
+
+    padding-left: 4px; /* space before [Text] */
+    padding-right: 16px; /* add space for [Arrow] */
+}
+
+QHeaderView::section:horizontal {
+    border-left-color: transparent;
+}
+
+QHeaderView::section:vertical {
+    border-top-color: transparent;
+}
+
+QHeaderView::section:horizontal:first {
+    border-left-color: rgb( 77, 77, 77 );   /* Main BORDER */
+    border-top-left-radius: 4px;
+}
+
+QHeaderView::section:horizontal:last {
+    border-top-right-radius: 4px;
+}
+
+QHeaderView::section:vertical:first {
+    border-top-color: rgb( 77, 77, 77 );    /* Main BORDER */
+    border-top-left-radius: 4px;
+}
+
+QHeaderView::section:vertical:last {
+    border-bottom-left-radius: 4px;
+}
+
+QHeaderView::section:hover {
+    background: rgb( 241, 241, 241 );       /* Button BKGR (hover) */
+}
+
+/* -- Arrow -- */
+
+QHeaderView::down-arrow {
+    image: url(julius:themes/blenderlight/arrow_up.svg);
+
+    subcontrol-origin: border;            /* margin, border, padding, content */
+    subcontrol-position: right center;    /* top, bottom, left, right, center */
+
+    width: 16px;  /* width: 0.70em; */
+    height: 16px; /* height: 0.70em; */
+
+    left: -4px; /* move it to left */
+}
+
+QHeaderView::up-arrow {
+    image: url(julius:themes/blenderlight/arrow_down.svg);
+
+    subcontrol-origin: border;            /* margin, border, padding, content */
+    subcontrol-position: right center;    /* top, bottom, left, right, center */
+
+    width: 16px;  /* width: 0.70em; */
+    height: 16px; /* height: 0.70em; */
+
+    left: -4px; /* move it to left */
+}
+
+QHeaderView::down-arrow:hover {
+    image: url(julius:themes/blenderlight/arrow_up_selected.svg);
+}
+
+QHeaderView::up-arrow:hover {
+    image: url(julius:themes/blenderlight/arrow_down_selected.svg);
+}
+
+/* ---- QListView ---- */
+
+/* Used in: File Selector (left panel), BrushExport plugin */
+
+QListView {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: rgb( 204, 204, 204 );       /* Light BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );    /* Main BORDER */
+    border-radius: 4px;
+    outline: none;
+    padding: 2px; /* space around [Content+ScrollBar] */
+
+    selection-color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    selection-background-color: rgb( 86, 128, 194 );  /* Main BLUE */
+}
+
+QListView:hover {
+    border-color: rgb( 100, 160, 255 );     /* BLUE 2 */
+}
+
+/* -- Items -- */
+
+QListView::item {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: transparent;
+    margin: 1px; /* space around [Items] */
+    border: none;
+    border-radius: 4px;
+    padding: 0px;
+
+ /* height: 0.90em; */ /* shrink items so they take up less space */
+}
+
+QListView::item:hover {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: rgb( 179, 179, 179 );       /* Main BKGR */
+}
+
+QListView::item:selected {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgb( 86, 128, 194 );        /* Main BLUE */
+}
+
+QListView::item:selected:hover {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgb( 122, 162, 225 );       /* Light BLUE */
+}
+
+QListView::item:selected:!active {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgba( 86, 128, 194, 50% );  /* Main BLUE + Alpha */
+}
+
+QListView::item:selected:hover:!active {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgb( 86, 128, 194 );        /* Main BLUE */
+}
+
+QListView::item:disabled {
+    color: rgba( 26, 26, 26, 50% );         /* Disabled TEXT */
+}
+
+/* ---- QTableView ---- */
+
+/* Used in: bobToolz "Vis Viewer" plugin */
+
+QTableView {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: rgb( 204, 204, 204 );       /* Light BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );    /* Main BORDER */
+    border-radius: 4px;
+    outline: none;
+    padding: 2px; /* space around [Content+ScrollBar] */
+
+    selection-color: transparent;
+    selection-background-color: transparent;
+
+    gridline-color: rgba( 0, 0, 0, 15% );   /* BLACK + Alpha */
+}
+
+QTableView:hover {
+    border-color: rgb( 100, 160, 255 );     /* BLUE 2 */
+}
+
+/* -- Corner Button -- */
+
+QTableView QTableCornerButton::section {
+    background: transparent;
+    margin: 0px;
+    border: 1px solid transparent;
+    border-radius: 0x;
+    padding: 0px;
+}
+
+/* -- Items -- */
+
+QTableView::item {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: transparent;
+    margin: 2px; /* space around [Items] */
+    border: none;
+    border-radius: 4px;
+    padding: 0px;
+}
+
+QTableView::item:hover {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: rgb( 179, 179, 179 );       /* Main BKGR */
+}
+
+QTableView::item:selected {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgb( 86, 128, 194 );        /* Main BLUE */
+}
+
+QTableView::item:selected:hover {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgb( 122, 162, 225 );       /* Light BLUE */
+}
+
+QTableView::item:selected:!active {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgba( 86, 128, 194, 50% );  /* Main BLUE + Alpha */
+}
+
+QTableView::item:selected:hover:!active {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgb( 86, 128, 194 );        /* Main BLUE */
+}
+
+QTableView::item:disabled {
+    color: rgba( 26, 26, 26, 50% );         /* Disabled TEXT */
+}
+
+/* ---- QTreeView ---- */
+
+/* Used in: Preferences, EI (1st & 3rd panels), TexBro + ModelBro + LayersBro,
+            Map Info, Ent. List (Shift+L), File Selector (right panel) */
+
+QTreeView {
+    qproperty-expandsOnDoubleClick: 1;      /* enable double click in Items */
+    qproperty-animated: 1;                  /* enable opening animation */
+}
+
+QTreeView {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: rgb( 204, 204, 204 );       /* Light BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );    /* Main BORDER */
+    border-radius: 4px;
+    outline: none;
+    padding: 2px; /* space around [Content+ScrollBar] */
+
+    selection-color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    selection-background-color: rgb( 86, 128, 194 );  /* Main BLUE */
+
+    show-decoration-selected: 0; /* selection covers [Text] only */
+}
+
+QTreeView:hover {
+    border-color: rgb( 100, 160, 255 );     /* BLUE 2 */
+}
+
+/* -- Items -- */
+
+QTreeView::item {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: transparent;
+    margin: 1px; /* space around [Items] */
+    border: none;
+    border-radius: 4px;
+    padding: 0px;
+
+ /* height: 0.90em; */ /* shrink items so they take up less space */
+}
+
+QTreeView::item:hover {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: rgb( 179, 179, 179 );       /* Main BKGR */
+}
+
+QTreeView::item:selected {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgb( 86, 128, 194 );        /* Main BLUE */
+}
+
+QTreeView::item:selected:hover {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgb( 122, 162, 225 );       /* Light BLUE */
+}
+
+QTreeView::item:selected:!active {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgba( 86, 128, 194, 50% );  /* Main BLUE + Alpha */
+}
+
+QTreeView::item:selected:hover:!active {
+    color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    background: rgb( 86, 128, 194 );        /* Main BLUE */
+}
+
+QTreeView::item:disabled {
+    color: rgba( 26, 26, 26, 50% );         /* Disabled TEXT */
+}
+
+/* -- Branches -- */
+
+/* border-image: 0 is equivalent to 0 0 0 0 (image slices), stretch is default */
+
+QTreeView::branch:!has-children:has-siblings:!adjoins-item {
+    border-image: url(julius:themes/blenderlight/branch.svg) 0;
+}
+
+QTreeView::branch:!has-children:has-siblings:adjoins-item {
+    border-image: url(julius:themes/blenderlight/branch_more.svg) 0;
+}
+
+QTreeView::branch:!has-children:!has-siblings:adjoins-item {
+    border-image: url(julius:themes/blenderlight/branch_end.svg) 0;
+}
+
+/* -- Branches (Arrows) -- */
+
+/* has siblings = tiene hermanos */
+/* has children = tiene hijos */
+/* adjoins item = hay elemento adyacente */
+
+QTreeView::branch:open:has-children:has-siblings {
+    border-image: url(julius:themes/blenderlight/tree_open.svg) 0;
+}
+
+QTreeView::branch:open:has-children:!has-siblings {
+    border-image: url(julius:themes/blenderlight/tree_open_end.svg) 0;
+}
+
+QTreeView::branch:closed:has-children:has-siblings {
+    border-image: url(julius:themes/blenderlight/tree_closed.svg) 0;
+}
+
+QTreeView::branch:closed:has-children:!has-siblings {
+    border-image: url(julius:themes/blenderlight/tree_closed_end.svg) 0;
+}
+
+/* hover state */
+
+QTreeView::branch:open:has-children:has-siblings:hover {
+    border-image: url(julius:themes/blenderlight/tree_open_hover.svg) 0;
+}
+
+QTreeView::branch:open:has-children:!has-siblings:hover {
+    border-image: url(julius:themes/blenderlight/tree_open_end_hover.svg) 0;
+}
+
+QTreeView::branch:closed:has-children:has-siblings:hover {
+    border-image: url(julius:themes/blenderlight/tree_closed_hover.svg) 0;
+}
+
+QTreeView::branch:closed:has-children:!has-siblings:hover {
+    border-image: url(julius:themes/blenderlight/tree_closed_end_hover.svg) 0;
+}
+
+/* ---- QScrollBar (Input) ----------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QAbstractSlider => QScrollBar                      |
+|                                           => QSlider                         |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+/* Main ScrollBar: QOpenGLWidget (TexBro & ModelBro) */
+
+QScrollBar {
+    background: rgb( 64, 64, 64 );          /* same as QOpenGLWidget */
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 2px;
+}
+
+QScrollBar:vertical {
+    width: 12px;
+}
+
+QScrollBar:horizontal {
+    height: 12px;
+}
+
+/* Secondary ScrollBar: QAbstractScrollArea (QListView, QTreeView, etc.) */
+
+QAbstractScrollArea QScrollBar {
+    background: rgb( 204, 204, 204 );       /* Light BKGR */
+    padding: 0px;
+}
+
+QAbstractScrollArea QScrollBar:vertical {
+    width: 8px;
+}
+
+QAbstractScrollArea QScrollBar:horizontal {
+    height: 8px;
+}
+
+/* -- Buttons (invisible) -- */
+
+QScrollBar::sub-line, QScrollBar::add-line {
+    background: none;
+    margin: 0px;
+    border: none;
+    padding: 0px;
+
+    subcontrol-origin: margin;
+}
+
+QScrollBar::sub-line:vertical {
+    subcontrol-position: top;
+    height: 0px;
+}
+
+QScrollBar::add-line:vertical {
+    subcontrol-position: bottom;
+    height: 0px;
+}
+
+QScrollBar::sub-line:horizontal {
+    subcontrol-position: left;
+    width: 0px;
+}
+
+QScrollBar::add-line:horizontal {
+    subcontrol-position: right;
+    width: 0px;
+}
+
+/* -- Page Control (region between Handle & Buttons) -- */
+
+QScrollBar::sub-page, QScrollBar::add-page {
+    background: transparent; /* I prefer it invisible */
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+}
+
+QScrollBar::sub-page:vertical {
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+
+    margin-bottom: -4px;
+}
+
+QScrollBar::add-page:vertical {
+    border-bottom-left-radius: 4px;
+    border-bottom-right-radius: 4px;
+
+    margin-top: -4px;
+}
+
+QScrollBar::sub-page:horizontal {
+    border-top-left-radius: 4px;
+    border-bottom-left-radius: 4px;
+
+    margin-right: -4px;
+}
+
+QScrollBar::add-page:horizontal {
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+
+    margin-left: -4px;
+}
+
+/* -- Handle -- */
+
+QScrollBar::handle {
+    background: rgb( 153, 153, 153 );       /* Dark BKGR */
+    margin: 0px;
+    border: none;
+    border-radius: 4px;
+    padding: 0px;
+}
+
+QScrollBar::handle:vertical {
+    min-height: 32px;
+}
+
+QScrollBar::handle:horizontal {
+    min-width: 32px;
+}
+
+QScrollBar::handle:hover {
+    background: rgb( 26, 26, 26 );          /* Menu Selected Item BKGR */
+}
+
+QScrollBar::handle:pressed {
+    background: rgb( 26, 26, 26 );          /* Menu Selected Item BKGR */
+}
+
+QScrollBar::handle:disabled {
+    background: transparent;                /* invisible */
+}
+
+/* Recolor the Handle for QAbstractScrollArea */
+
+QAbstractScrollArea QScrollBar::handle {
+ /* placeholder */
+}
+
+QAbstractScrollArea QScrollBar::handle:hover {
+ /* placeholder */
+}
+
+QAbstractScrollArea QScrollBar::handle:pressed {
+ /* placeholder */
+}
+
+/* ---- QSlider (Input) -------------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QAbstractSlider => QScrollBar                      |
+|                                           => QSlider                         |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QSlider {
+    background: none;
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+}
+
+QSlider:horizontal {
+    height: 20px;
+}
+
+QSlider:vertical {
+    width: 20px;
+}
+
+/* -- Groove (I set it invisible) -- */
+
+/* By default is same size as the QSlider.
+   It also sets Page Control size. */
+
+QSlider::groove {
+    background: none;
+    margin: 0px;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    padding: 0px;
+}
+
+QSlider::groove:horizontal {
+    height: 4px;
+}
+
+QSlider::groove:vertical {
+    width: 4px;
+}
+
+/* -- Page Control (regions before and after the Handle) -- */
+
+QSlider::sub-page:horizontal {
+    background: rgb( 86, 128, 194 );        /* Main BLUE */
+    margin-left: 8px;
+    border: 1px solid rgb( 77, 77, 77 );    /* Main BORDER */
+    border-radius: 2px;
+    padding: 0px;
+}
+
+QSlider::add-page:horizontal {
+    background: rgb( 179, 179, 179 );       /* Main BKGR */
+    margin-right: 8px;
+    border: 1px solid rgb( 77, 77, 77 );    /* Main BORDER */
+    border-radius: 2px;
+    padding: 0px;
+}
+
+QSlider::sub-page:vertical {
+    background: rgb( 86, 128, 194 );        /* Main BLUE */
+    margin-bottom: 8px;
+    border: 1px solid rgb( 77, 77, 77 );    /* Main BORDER */
+    border-radius: 2px;
+    padding: 0px;
+}
+
+QSlider::add-page:vertical {
+    background: rgb( 179, 179, 179 );       /* Main BKGR */
+    margin-top: 8px;
+    border: 1px solid rgb( 77, 77, 77 );    /* Main BORDER */
+    border-radius: 2px;
+    padding: 0px;
+}
+
+QSlider::sub-page:disabled {
+    background: rgba( 86, 128, 194, 50% );  /* Main BLUE + Alpha */
+    border-color: rgba( 77, 77, 77, 50% );  /* Disabled BORDER */
+}
+
+QSlider::add-page:disabled {
+    background: rgba( 179, 179, 179, 50% ); /* Main BKGR + Alpha */
+    border-color: rgba( 77, 77, 77, 50% );  /* Disabled BORDER */
+}
+
+/* -- Handle -- */
+
+/* Handle is placed by default on the contents rect of the Groove.
+   Use negative margins to set higher size than Groove. */
+
+QSlider::handle:horizontal {
+    margin: -10px 0px;
+    width: 20px;
+}
+
+QSlider::handle:vertical {
+    margin: 0px -10px;
+    height: 20px;
+}
+
+QSlider::handle {
+    image: url(julius:themes/blenderlight/slider_handle.svg);
+}
+
+QSlider::handle:hover, QSlider::handle:pressed {
+    image: url(julius:themes/blenderlight/slider_handle_hover.svg);
+}
+
+QSlider::handle:disabled {
+    image: url(julius:themes/blenderlight/slider_handle_disabled.svg);
+}
+
+/* ---- QCheckBox + QRadioButton (Buttons) ------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QAbstractButton => QCheckBox                       |
+|                                           => QRadioButton                    |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+/* ---- QCheckBox ---- */
+
+QCheckBox {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: transparent;
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+
+    outline: none;
+
+    spacing: 4px; /* space between [Icon] & [Text] */
+}
+
+QCheckBox:hover {
+ /* placeholder */
+}
+
+QCheckBox:disabled {
+    color: rgba( 26, 26, 26, 50% );         /* Disabled TEXT */
+}
+
+/* -- The Icon -- */
+
+QCheckBox::indicator {
+    background: none;
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+
+    width: 20px;  /* width: 0.85em; */
+    height: 20px; /* width: 0.85em; */
+}
+
+QCheckBox::indicator:checked {
+    image: url(julius:themes/blenderlight/checkbox_checked.svg);
+}
+
+QCheckBox::indicator:checked:hover {
+    image: url(julius:themes/blenderlight/checkbox_checked_selected.svg);
+}
+
+QCheckBox::indicator:checked:pressed {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_selected.svg);
+}
+
+QCheckBox::indicator:checked:disabled {
+    image: url(julius:themes/blenderlight/checkbox_checked_disabled.svg);
+}
+
+QCheckBox::indicator:unchecked {
+    image: url(julius:themes/blenderlight/checkbox_unchecked.svg);
+}
+
+QCheckBox::indicator:unchecked:hover {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_selected.svg);
+}
+
+QCheckBox::indicator:unchecked:pressed {
+    image: url(julius:themes/blenderlight/checkbox_checked_selected.svg);
+}
+
+QCheckBox::indicator:unchecked:disabled {
+    image: url(julius:themes/blenderlight/checkbox_unchecked_disabled.svg);
+}
+
+/* ---- QRadioButton ---- */
+
+QRadioButton {
+    color: rgb( 26, 26, 26 );               /* Main TEXT */
+    background: transparent;
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+
+    outline: none;
+
+    spacing: 4px; /* space between [Icon] & [Text] */
+}
+
+QRadioButton:hover {
+ /* placeholder */
+}
+
+QRadioButton:disabled {
+    color: rgba( 26, 26, 26, 50% );         /* Disabled TEXT */
+}
+
+/* -- The Icon -- */
+
+QRadioButton::indicator {
+    background: none;
+    margin: 0px;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+
+    width: 20px;  /* width: 0.85em; */
+    height: 20px; /* width: 0.85em; */
+}
+
+QRadioButton::indicator:checked {
+    image: url(julius:themes/blenderlight/radiobutton_checked.svg);
+}
+
+QRadioButton::indicator:checked:hover {
+    image: url(julius:themes/blenderlight/radiobutton_checked_selected.svg);
+}
+
+QRadioButton::indicator:checked:pressed {
+    image: url(julius:themes/blenderlight/radiobutton_checked.svg);
+}
+
+QRadioButton::indicator:checked:disabled {
+    image: url(julius:themes/blenderlight/radiobutton_checked_disabled.svg);
+}
+
+QRadioButton::indicator:unchecked {
+    image: url(julius:themes/blenderlight/radiobutton_unchecked.svg);
+}
+
+QRadioButton::indicator:unchecked:hover {
+    image: url(julius:themes/blenderlight/radiobutton_unchecked_selected.svg);
+}
+
+QRadioButton::indicator:unchecked:pressed {
+    image: url(julius:themes/blenderlight/radiobutton_checked_selected.svg);
+}
+
+QRadioButton::indicator:unchecked:disabled {
+    image: url(julius:themes/blenderlight/radiobutton_unchecked_disabled.svg);
+}
+
+/* ---- QPushButton + QToolButton (Buttons) -----------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QAbstractButton => QPushButton                     |
+|                                           => QToolButton                     |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+/* ---- QAbstractButton ---- */
+
+/*
+QAbstractButton {
+    qproperty-iconSize: 24px 24px;
+}
+*/
+
+/* ---- QPushButton ---- */
+
+QPushButton {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+    background: rgb( 219, 219, 219 );            /* Button BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );         /* Main BORDER */
+    border-radius: 4px;
+    padding: 4px; /* space around [Icon+Text] */
+
+    outline: none;
+    min-width: 3em;
+}
+
+QTabWidget QPushButton {
+    min-width: 3.5em; /* prevent buttons from shrinking too much in EI */
+}
+
+QPushButton:hover {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+    background: rgb( 241, 241, 241 );            /* Button BKGR (hover) */
+    border-color: rgb( 89, 89, 89 );             /* Main BORDER (hover) */
+}
+
+QPushButton:pressed {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+    background: rgb( 219, 219, 219 );            /* Button BKGR */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QPushButton:default {
+    color: rgb( 230, 230, 230 );                 /* Light TEXT */
+    background: rgb( 86, 128, 194 );             /* Main BLUE */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QPushButton:default:hover {
+    color: rgb( 255, 255, 255 );                 /* Selected TEXT */
+    background: rgb( 122, 162, 225 );            /* Light BLUE */
+    border-color: rgb( 89, 89, 89 );             /* Main BORDER (hover) */
+}
+
+QPushButton:default:pressed {
+    color: rgb( 230, 230, 230 );                 /* Light TEXT */
+    background: rgb( 86, 128, 194 );             /* Main BLUE */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QPushButton:!default:focus {
+    border-color: rgb( 100, 160, 255 );          /* Main BLUE 2 */
+}
+
+QPushButton:!default:focus:hover {
+    border-color: rgb( 126, 176, 255 );          /* Light BLUE 2 */
+}
+
+QPushButton:!default:focus:pressed {
+    border-color: rgb( 100, 160, 255 );          /* Main BLUE 2 */
+}
+
+QPushButton:disabled {
+    color: rgba( 26, 26, 26, 50% );              /* Disabled TEXT */
+    background: rgba( 219, 219, 219, 75% );      /* Button BKGR + Alpha */
+    border-color: rgba( 77, 77, 77, 50% );       /* Disabled BORDER */
+}
+
+/* ---- QToolButton ---- */
+
+QToolButton {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+    background: rgb( 219, 219, 219 );            /* Button BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );         /* Main BORDER */
+    border-radius: 4px;
+    padding: 2px; /* space around [Icon/Text] */
+}
+
+QToolButton:hover {
+    background: rgb( 241, 241, 241 );            /* Button BKGR (hover) */
+    border-color: rgb( 89, 89, 89 );             /* Main BORDER (hover) */
+}
+
+QToolButton:pressed {
+    background: rgb( 219, 219, 219 );            /* Button BKGR */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QToolButton:on {
+    background: rgb( 158, 196, 255 );            /* Lighter BLUE */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QToolButton:on:hover {
+    background: rgb( 204, 224, 255 );            /* extraLighter BLUE */
+    border-color: rgb( 89, 89, 89 );             /* Main BORDER (hover) */
+}
+
+QToolButton:on:pressed {
+    background: rgb( 219, 219, 219 );            /* Button BKGR */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QToolButton:!on:focus {
+    border-color: rgb( 100, 160, 255 );          /* Main BLUE 2 */
+}
+
+QToolButton:!on:focus:hover {
+    border-color: rgb( 126, 176, 255 );          /* Light BLUE 2 */
+}
+
+QToolButton:!on:focus:pressed {
+    border-color: rgb( 100, 160, 255 );          /* Main BLUE 2 */
+}
+
+QToolButton:disabled {
+    color: rgba( 26, 26, 26, 50% );              /* Disabled TEXT */
+    background: rgba( 0, 0, 0, 10% );            /* BLACK + Alpha */
+    border-color: rgba( 77, 77, 77, 50% );       /* Disabled BORDER */
+}
+
+/* ---- QSpinBox + QDoubleSpinBox (Input) -------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QAbstractSpinBox => QSpinBox                       |
+|                                            => QDoubleSpinBox                 |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QAbstractSpinBox {
+    qproperty-alignment: AlignCenter;
+}
+
+QSpinBox, QDoubleSpinBox {
+    color: rgb( 26, 26, 26 );                         /* Main TEXT */
+    background: rgb( 204, 204, 204 );                 /* Light BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );              /* Main BORDER */
+    border-radius: 4px;
+    padding: 0px 4px; /* space around [Text] */
+
+    selection-color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    selection-background-color: rgb( 86, 128, 194 );  /* Main BLUE */
+
+    min-height: 26px; /* 1.15em; */ /* sets a fixed height */
+    max-height: 26px; /* 1.15em; */
+}
+
+QSpinBox {
+    min-width: 2.5em; /* avoid too small SpinBox in some plugins */
+}
+
+QSpinBox:hover, QDoubleSpinBox:hover {
+ /* placeholder */
+    background: rgb( 230, 230, 230 );                 /* TextInput BKGR (hover) */
+    border-color: rgb( 89, 89, 89 );                  /* Main BORDER (hover) */
+}
+
+QSpinBox:focus, QDoubleSpinBox:focus {
+    color: rgb( 26, 26, 26 );                         /* Main TEXT */
+    background: rgb( 204, 204, 204 );                 /* Light BKGR */
+    border-color: rgb( 100, 160, 255 );               /* Main BLUE 2 */
+}
+
+QSpinBox:!active, QDoubleSpinBox:!active {
+    selection-color: rgb( 230, 230, 230 );            /* Light TEXT */
+    selection-background-color: rgba( 0, 0, 0, 25% ); /* BLACK + Alpha */
+}
+
+QSpinBox:disabled, QDoubleSpinBox:disabled {
+    color: rgba( 26, 26, 26, 50% );                   /* Disabled TEXT */
+    background: rgb( 192, 192, 192 );
+    border-color: rgba( 77, 77, 77, 50% );            /* Disabled BORDER */
+}
+
+/* -- Buttons -- */
+
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    background: rgb( 219, 219, 219 );                 /* Button BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );              /* Main BORDER */
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+    padding: 0px;
+
+    subcontrol-origin: border;            /* margin, border, PADDING, content */
+    subcontrol-position: center right;    /* TOP, bottom, left, RIGHT, center */
+
+    width: 20px; /* 0.85em; */
+    height: 26px; /* 1.15em; */
+}
+
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    background: rgb( 219, 219, 219 );                 /* Button BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );              /* Main BORDER */
+    border-top-left-radius: 4px;
+    border-bottom-left-radius: 4px;
+    padding: 0px;
+
+    subcontrol-origin: border;            /* margin, border, PADDING, content */
+    subcontrol-position: center left;     /* top, BOTTOM, left, RIGHT, center */
+
+    width: 20px; /* 0.85em; */
+    height: 26px; /* 1.15em; */
+}
+
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover {
+    background: rgb( 241, 241, 241 );            /* Button BKGR (hover) */
+    border-color: rgb( 89, 89, 89 );             /* Main BORDER (hover) */
+}
+
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+    background: rgb( 241, 241, 241 );            /* Button BKGR (hover) */
+    border-color: rgb( 89, 89, 89 );             /* Main BORDER (hover) */
+}
+
+QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed {
+    background: rgb( 219, 219, 219 );            /* Button BKGR */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
+    background: rgb( 219, 219, 219 );            /* Button BKGR */
+    border-color: rgb( 77, 77, 77 );             /* Main BORDER */
+}
+
+QSpinBox::up-button:focus, QDoubleSpinBox::up-button:focus {
+    border-color: rgb( 100, 160, 255 );          /* Main BLUE 2 */
+}
+
+QSpinBox::down-button:focus, QDoubleSpinBox::down-button:focus {
+    border-color: rgb( 100, 160, 255 );          /* Main BLUE 2 */
+}
+
+QSpinBox::up-button:disabled, QDoubleSpinBox::up-button:disabled {
+    background: rgba( 219, 219, 219, 50% );      /* Button BKGR + Alpha */
+    border-color: rgba( 77, 77, 77, 50% );       /* Disabled BORDER */
+}
+
+QSpinBox::down-button:disabled, QDoubleSpinBox::down-button:disabled {
+    background: rgba( 219, 219, 219, 50% );      /* Button BKGR + Alpha */
+    border-color: rgba( 77, 77, 77, 50% );       /* Disabled BORDER */
+}
+
+/* -- Arrows -- */
+
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    image: url(julius:themes/blenderlight/chevron_right.svg);
+
+    subcontrol-origin: border;
+    subcontrol-position: center center;
+
+    width: 22px; /* 0.95em; */
+    height: 22px; /* 0.95em; */
+}
+
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    image: url(julius:themes/blenderlight/chevron_left.svg);
+
+    subcontrol-origin: border;
+    subcontrol-position: center center;
+
+    width: 22px; /* 0.95em; */
+    height: 22px; /* 0.95em; */
+}
+
+QSpinBox::up-arrow:hover, QDoubleSpinBox::up-arrow:hover {
+ /* placeholder */
+}
+
+QSpinBox::down-arrow:hover, QDoubleSpinBox::down-arrow:hover {
+ /* placeholder */
+}
+
+QSpinBox::up-arrow:pressed, QDoubleSpinBox::up-arrow:pressed {
+    image: url(julius:themes/blenderlight/chevron_right.svg);
+
+    width: 18px; /* 0.80em; */
+    height: 18px; /* 0.80em; */
+}
+
+QSpinBox::down-arrow:pressed, QDoubleSpinBox::down-arrow:pressed {
+    image: url(julius:themes/blenderlight/chevron_left.svg);
+
+    width: 18px; /* 0.80em; */
+    height: 18px; /* 0.80em; */
+}
+
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled {
+    image: url(julius:themes/blenderlight/chevron_right_disabled.svg);
+}
+
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {
+    image: url(julius:themes/blenderlight/chevron_left_disabled.svg);
+}
+
+QSpinBox::up-arrow:off, QDoubleSpinBox::up-arrow:off {
+    image: url(julius:themes/blenderlight/chevron_right_disabled.svg);
+}
+
+QSpinBox::down-arrow:off, QDoubleSpinBox::down-arrow:off {
+    image: url(julius:themes/blenderlight/chevron_left_disabled.svg);
+}
+
+/* ---- QLineEdit (Input) -----------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QLineEdit                                          |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QLineEdit {
+    color: rgb( 26, 26, 26 );                         /* Main TEXT */
+    background: rgb( 204, 204, 204 );                 /* Light BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 77, 77, 77 );              /* Main BORDER */
+    border-radius: 4px;
+    padding: 0px 4px; /* space around [Text] */
+
+    selection-color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    selection-background-color: rgb( 86, 128, 194 );  /* Main BLUE */
+
+    min-width: 2.80em;
+
+    min-height: 26px; /* 1.15em; */ /* sets a fixed height */
+    max-height: 26px; /* 1.15em; */
+}
+
+QLineEdit:hover {
+ /* placeholder */
+    background: rgb( 230, 230, 230 );                 /* TextInput BKGR (hover) */
+    border-color: rgb( 89, 89, 89 );                  /* Main BORDER (hover) */
+}
+
+QLineEdit:focus {
+    color: rgb( 26, 26, 26 );                         /* Main TEXT */
+    background: rgb( 204, 204, 204 );                 /* Light BKGR */
+    border-color: rgb( 100, 160, 255 );               /* Main BLUE 2 */
+}
+
+QLineEdit:!active {
+    selection-color: rgb( 230, 230, 230 );            /* Light TEXT */
+    selection-background-color: rgba( 0, 0, 0, 25% ); /* BLACK + Alpha */
+}
+
+QLineEdit:disabled {
+    color: rgba( 26, 26, 26, 50% );                   /* Disabled TEXT */
+    background: rgba( 219, 219, 219, 50% );           /* Button BKGR + Alpha */
+    border-color: rgba( 77, 77, 77, 50% );            /* Disabled BORDER */
+}
+
+/* ---- QComboBox (Input) -----------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QComboBox                                          |
+|                                                                              |
+|   Inheritance of the pop-up window:                                          |
+|                                                                              |
+|    QWidget => QFrame => QAbstractScrollArea => QAbstractItemView             |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+QComboBox {
+    color: rgb( 230, 230, 230 );                 /* Light TEXT */
+    background: rgb( 59, 59, 59 );               /* Combo BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 0, 0, 0 );            /* Combo BORDER */
+    border-radius: 4px;
+    padding: 0px 4px; /* space around [Text] */
+
+    selection-color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    selection-background-color: rgb( 86, 128, 194 );  /* Main BLUE */
+
+    min-height: 26px; /* 1.15em; */ /* sets a fixed height */
+    max-height: 26px; /* 1.15em; */
+}
+
+QComboBox:hover {
+    color: rgb( 255, 255, 255 );                 /* Selected TEXT */
+    background: rgb( 71, 71, 71 );               /* Combo BKGR (hover) */
+    border-color: rgb( 25, 25, 25 );             /* Combo BORDER (hover) */
+}
+
+QComboBox:focus {
+    color: rgb( 255, 255, 255 );                 /* Selected TEXT */
+    background: rgb( 59, 59, 59 );               /* Combo BKGR */
+    border-color: rgb( 100, 160, 255 );          /* Main BLUE 2 */
+}
+
+QComboBox:on:editable { /* ON when pop-up is open */
+    color: rgb( 255, 255, 255 );                 /* Selected TEXT */
+    background: rgb( 118, 118, 118 );            /* Combo BKGR (open) */
+    border-color: rgb( 61, 61, 61 );             /* Combo BORDER (open) */
+}
+
+QComboBox:disabled {
+    color: rgba( 230, 230, 230, 50% );           /* Disabled Light TEXT */
+    background: rgba( 59, 59, 59, 50% );         /* Combo BKGR + Alpha */
+    border-color: rgba( 0, 0, 0, 50% );          /* Combo BORDER + Alpha */
+}
+
+/* -- Button -- */
+
+QComboBox::drop-down {
+    background: transparent;
+    margin: 0px;
+    border: 1px solid transparent;
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+    padding: 0px;
+
+    subcontrol-origin: border;            /* margin, border, PADDING, content */
+    subcontrol-position: center right;    /* TOP, bottom, left, RIGHT, center */
+
+    width: 20px; /* 0.85em; */
+}
+
+/* -- Arrow -- */
+
+QComboBox::down-arrow {
+    image: url(julius:themes/blenderlight/combo_arrow.svg);
+
+    width: 22px; /* 0.95em; */
+    height: 22px; /* 0.95em; */
+}
+
+QComboBox::down-arrow:hover {
+    image: url(julius:themes/blenderlight/combo_arrow_hover.svg);
+}
+
+QComboBox::down-arrow:disabled {
+    image: url(julius:themes/blenderlight/combo_arrow_disabled.svg);
+}
+
+/* -- Pop-up Frame -- */
+
+QComboBox QAbstractItemView {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+    background: rgb( 192, 192, 192 );            /* Menu BKGR */
+    margin: 0px;
+    border: 1px solid rgb( 166, 166, 166 );      /* Menu BORDER */
+    border-radius: 0px;
+    outline: none;
+    padding: 2px; /* space around [Content] */
+
+    /* Selected Item in the list of editable ComboBox */
+    selection-color: rgb( 255, 255, 255 );            /* Selected TEXT */
+    selection-background-color: rgb( 26, 26, 26 );    /* Menu Selected Item BKGR */
+}
+
+/* Avoid visible QListView:hover border */
+
+QComboBox QAbstractItemView:hover {
+    border-color: rgb( 166, 166, 166 );          /* Menu BORDER */
+}
+
+/* -- Checkmark -- */
+
+/* A checkmark is shown when using "QComboBox::item". This removes it and
+   the space it leaves. */
+
+QComboBox::indicator {
+    image: none; /* remove the checkmark */
+
+    width: 0px;
+    height: 0px;
+}
+
+QComboBox QAbstractItemView {
+    icon-size: 0px 0px; /* remove the space */
+}
+
+/* -- Items -- */
+
+QComboBox::item {
+    color: rgb( 26, 26, 26 );                    /* Main TEXT */
+    background: transparent;
+    margin: 1px; /* space around [Items] */
+    border: none;
+    border-radius: 4px;
+    padding: 0px;
+
+    max-height: 23px; /* 1.0em; */ /* it takes full window height if not set */
+}
+
+QComboBox::item:selected {
+    color: rgb( 255, 255, 255 );                 /* Selected TEXT */
+    background: rgb( 26, 26, 26 );               /* Menu Selected Item BKGR */
+}
+
+QComboBox::item:checked {
+    color: rgb( 255, 255, 255 );                 /* Selected TEXT */
+    background: rgb( 86, 128, 194 );             /* Main BLUE */
+}
+
+QComboBox::item:checked:selected {
+    color: rgb( 255, 255, 255 );                 /* Selected TEXT */
+    background: rgb( 122, 162, 225 );            /* Light BLUE */
+}
+
+QComboBox::item:disabled {
+    color: rgba( 26, 26, 26, 50% );              /* Disabled TEXT */
+}
+
+/* ---- QSizeGrip ( ) ---------------------------------------------------------
+|                                                                              |
+|   Inheritance: QWidget => QSizeGrip                                          |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+/* Used in: Select Font window */
+
+QSizeGrip {
+    background: transparent;
+    image: url(julius:themes/blenderlight/resize_handle.svg);
+
+    width: 16px;  /* width: 0.70em; */
+    height: 16px; /* height: 0.70em; */
+}
+
+/* ---- Linux ------------------------------------------------------------------
+|                                                                              |
+|   NOTE: File Selector of KDE is a QDialog window with these widgets:         |
+|                                                                              |
+|    - QListView (left panel).                                                 |
+|    - QSplitter (vertical).                                                   |
+|    - QToolBar + QToolButton + QSlider.                                       |
+|    - File path; no idea what widget is.                                      |
+|    - QTreeView + QHeaderView (right panel).                                  |
+|    - QLabel (2x just before QComboBox).                                      |
+|    - QComboBox (2x at the bottom).                                           |
+|    - QPushButton (2x at the bottom).                                         |
+|                                                                              |
+ ---------------------------------------------------------------------------- */
+
+/* Remove Icons in File Selector buttons (Open, Save, Cancel, etc.) */
+
+QDialog QPushButton {
+    icon: none;
+}
+
+/* EOF ------------------------------- EOF ------------------------------ EOF */

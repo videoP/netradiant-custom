@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="32"
+   height="32"
+   viewBox="0 0 32 32"
+   version="1.1"
+   id="svg1"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <path
+     id="branch"
+     style="fill:#1a1a1a;fill-opacity:0.25;stroke:none"
+     d="m 15,0 v 7 h 2 V 0 Z m 9,15 v 2 h 8 v -2 z m -9,10 v 7 h 2 v -7 z" />
+  <path
+     id="chevron_right"
+     style="fill:#1a1a1a;fill-opacity:1;stroke:none"
+     d="M 21,16 12.5,24.5 11,23 18,16 11,9 12.5,7.5 Z" />
+</svg>

@@ -9,6 +9,14 @@
 using HeightMap   = std::map<std::pair<double, double>, double>;
 using WallMap     = std::map<std::pair<double, double>, double>;
 
+// A standard-terrain grid vertex. x/y may be jittered away from the grid's
+// exact (rounded) key position when jitter_grid is enabled — z is the height.
+struct GridPoint
+{
+	double x, y, z;
+};
+using TerrainMap = std::map<std::pair<double, double>, GridPoint>;
+
 struct TunnelMaps
 {
 	HeightMap floor_map;
@@ -36,16 +44,25 @@ enum class NoiseType {
 	Random  = 2
 };
 
+// Direction Slope / Ridge / Valley / Tunnel / SlopeTunnel run along. Ignored
+// by radially symmetric shapes (Hill, Crater, Volcano).
+enum class Axis {
+	X = 0,
+	Y = 1
+};
+
 BrushData make_manual_brush_data( double width, double length, double height );
 
 void adjust_bounds_to_fit_grid( BrushData& target, double step_x, double step_y );
 
-HeightMap generate_height_map( const BrushData& target, double step_x, double step_y,
+TerrainMap generate_height_map( const BrushData& target, double step_x, double step_y,
                                 ShapeType shape_type, double shape_height,
                                 double variance, double frequency,
-                                NoiseType noise_type, double terrace_step );
+                                NoiseType noise_type, double terrace_step,
+                                Axis axis, bool jitter_grid, double grid_step );
 
 TunnelMaps generate_tunnel_height_maps( const BrushData& target, double step_x, double step_y,
                                         double cave_height, double slope_height,
                                         double variance, double frequency,
-                                        NoiseType noise_type, double terrace_step );
+                                        NoiseType noise_type, double terrace_step,
+                                        Axis axis, double grid_step );

@@ -1170,7 +1170,7 @@ void create_misc_menu( QMenuBar *menubar ){
 #endif
 	create_colours_menu( menu );
 
-	create_menu_item_with_mnemonic( menu, "Find brush...", "FindBrush" );
+	create_menu_item_with_mnemonic( menu, "Find Entity/Brush...", "FindBrush" );
 	create_menu_item_with_mnemonic( menu, "Map Info...", "MapInfo" );
 	create_menu_item_with_mnemonic( menu, "&Refresh models", "RefreshReferences" );
 	create_menu_item_with_mnemonic( menu, "Set 2D &Background image...", makeCallbackF( WXY_SetBackgroundImage ) );

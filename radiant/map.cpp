@@ -2082,7 +2082,7 @@ static void GetSelectionIndex( int *ent, int *brush ){
 
 void DoFind(){
 	QDialog dialog( MainFrame_getWindow(), Qt::Dialog | Qt::WindowCloseButtonHint );
-	dialog.setWindowTitle( "Find Brush" );
+	dialog.setWindowTitle( "Find Entity/Brush" );
 
 	auto *entity = new SpinBox( 0, 999999 );
 	entity->setButtonSymbols( QAbstractSpinBox::ButtonSymbols::NoButtons );

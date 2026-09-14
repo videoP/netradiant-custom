@@ -24,6 +24,7 @@
 #include <QMenu>
 #include <QActionGroup>
 #include <QFile>
+#include <QDir>
 
 #include "preferences.h"
 #include "mainframe.h"
@@ -38,6 +39,9 @@ enum class ETheme{
 	Fusion,
 	Dark,
 	Darker,
+	GreyBlue2,
+	BlenderDark,
+	BlenderLight,
 };
 
 static ETheme s_theme = ETheme::Dark;
@@ -150,6 +154,27 @@ void theme_set( ETheme theme ){
 
 		qApp->setStyleSheet( load_qss( "darker.qss" ) );
 	}
+	else if( theme == ETheme::GreyBlue2 ){
+		set_icon_theme( false );
+		qApp->setStyle( "Fusion" );
+		qApp->setPalette( defaults.palette );
+		QDir::addSearchPath( "julius", AppPath_get() ); // qss image paths prefix to avoid dependency on cwd
+		qApp->setStyleSheet( load_qss( "greyblue2.qss" ) );
+	}
+	else if( theme == ETheme::BlenderDark ){
+		set_icon_theme( false );
+		qApp->setStyle( "Fusion" );
+		qApp->setPalette( defaults.palette );
+		QDir::addSearchPath( "julius", AppPath_get() ); // qss image paths prefix to avoid dependency on cwd
+		qApp->setStyleSheet( load_qss( "blenderdark.qss" ) );
+	}
+	else if( theme == ETheme::BlenderLight ){
+		set_icon_theme( true );
+		qApp->setStyle( "Fusion" );
+		qApp->setPalette( defaults.palette );
+		QDir::addSearchPath( "julius", AppPath_get() ); // qss image paths prefix to avoid dependency on cwd
+		qApp->setStyleSheet( load_qss( "blenderlight.qss" ) );
+	}
 
 	defaults.is1stThemeApplication = false;
 }
@@ -159,7 +184,7 @@ void theme_construct_menu( class QMenu *menu ){
 	m->setTearOffEnabled( g_Layout_enableDetachableMenus.m_value );
 	auto *group = new QActionGroup( m );
 
-	for( const auto *name : { "Default", "Fusion", "Dark", "Darker" } )
+	for( const auto *name : { "Default", "Fusion", "Dark", "Darker", "GreyBlue2", "BlenderDark", "BlenderLight" } )
 	{
 		auto *a = m->addAction( name );
 		a->setCheckable( true );

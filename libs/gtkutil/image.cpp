@@ -61,6 +61,7 @@ void Bitmaps_generateLight( const char *appPath, const char *settingsPath ){
 					QByteArray data( file.readAll() );
 					if( fileinfo.suffix() == "svg" ){
 						data.replace( "#c0c0c0", "#808080" ); // main grey
+						data.replace( "#8E8E8F", "#656565" ); // statusbar grey
 						data.replace( "#f2d230", "#ccb128" ); // yellow in f-sky
 					}
 					QFile outfile( to.absolutePath() + '/' + fileinfo.fileName() );

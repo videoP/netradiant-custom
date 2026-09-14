@@ -106,7 +106,6 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 			s.valid = ( s.x1 - s.x0 >= min_size && s.y1 - s.y0 >= min_size );
 			return s;
 		};
-		const SelBounds init_sel = query_sel();
 
 		// --- Build dialog ---
 		QDialog dialog( main_window, Qt::Dialog | Qt::WindowCloseButtonHint );
@@ -116,11 +115,14 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 		dialog.setMinimumWidth( 420 );
 		auto *form = new QFormLayout( &dialog );
 
-		// Target mode
+		// Target mode. Remembered across dialog open/close, same as everything
+		// else below — regardless of whether there's currently a valid
+		// selection, so it's predictable rather than silently overridden.
+		static int s_target_index = 0; // Use Selection
 		auto *target_combo = new ComboBox;
 		target_combo->addItem( "Use Selection", 0 );
 		target_combo->addItem( "Manual Size",   1 );
-		target_combo->setCurrentIndex( init_sel.valid ? 0 : 1 );
+		target_combo->setCurrentIndex( s_target_index );
 		form->addRow( "Target:", target_combo );
 
 		// Selection size — live, read-only labels showing the current selection.
@@ -140,34 +142,56 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 		form->addRow( "Length (Y):", sel_l_label );
 		form->addRow( "Height (Z):", sel_h_label );
 
-		// Manual size inputs (shown in Manual Size mode)
-		auto *manual_w_spin = new SpinBox( 64, 131072, 1024, 0, 64 );
-		auto *manual_l_spin = new SpinBox( 64, 131072, 1024, 0, 64 );
-		auto *manual_h_spin = new SpinBox( 64, 131072,   64, 0, 64 );
+		// Manual size inputs (shown in Manual Size mode). Remembers the last
+		// values used across dialog open/close within this editor session, so
+		// repeated manual-size generation doesn't reset to hardcoded defaults
+		// every time the dialog is reopened.
+		constexpr double DEFAULT_MANUAL_W = 1024.0, DEFAULT_MANUAL_L = 1024.0, DEFAULT_MANUAL_H = 64.0;
+		static double s_manual_w = DEFAULT_MANUAL_W, s_manual_l = DEFAULT_MANUAL_L, s_manual_h = DEFAULT_MANUAL_H;
+		auto *manual_w_spin = new SpinBox( 64, 131072, s_manual_w, 0, 64 );
+		auto *manual_l_spin = new SpinBox( 64, 131072, s_manual_l, 0, 64 );
+		auto *manual_h_spin = new SpinBox( 64, 131072, s_manual_h, 0, 64 );
 		form->addRow( "Width (X):",  manual_w_spin );
 		form->addRow( "Length (Y):", manual_l_spin );
 		form->addRow( "Height (Z):", manual_h_spin );
 
-		// Sub-square size: preset combo + Advanced checkbox in one row
+		// Sub-square size: preset combo + Advanced checkbox in one row.
+		// This and most settings below are remembered across dialog open/close,
+		// same as Manual Size, since none are specific to one target mode.
+		static int  s_sq_index = 3; // 64
+		static bool s_advanced = false;
 		auto *sq_widget  = new QWidget;
 		auto *sq_hbox    = new QHBoxLayout( sq_widget );
 		sq_hbox->setContentsMargins( 0, 0, 0, 0 );
 		auto *sq_combo   = new ComboBox;
 		for ( int v : { 8, 16, 32, 64, 128, 256, 512, 1024 } )
 			sq_combo->addItem( QString::number( v ), v );
-		sq_combo->setCurrentIndex( 3 ); // 64
+		sq_combo->setCurrentIndex( s_sq_index );
 		auto *sq_advanced = new QCheckBox( "Advanced" );
+		sq_advanced->setChecked( s_advanced );
 		sq_hbox->addWidget( sq_combo );
 		sq_hbox->addWidget( sq_advanced );
 		form->addRow( "Sub-square Size:", sq_widget );
 
 		// Advanced step X/Y (hidden until Advanced is checked)
-		auto *step_x_spin = new SpinBox( 8, 512, 64, 0, 8 );
-		auto *step_y_spin = new SpinBox( 8, 512, 64, 0, 8 );
+		static int s_step_x = 64, s_step_y = 64;
+		auto *step_x_spin = new SpinBox( 8, 512, s_step_x, 0, 8 );
+		auto *step_y_spin = new SpinBox( 8, 512, s_step_y, 0, 8 );
 		form->addRow( "Step X:", step_x_spin );
 		form->addRow( "Step Y:", step_y_spin );
 
+		// Jitters each vertex's X/Y position (standard terrain only) so
+		// triangles vary in size instead of tiling identical rectangles.
+		static bool s_jitter = false;
+		auto *jitter_check = new QCheckBox( "Irregular Grid" );
+		jitter_check->setChecked( s_jitter );
+		jitter_check->setToolTip( "Varies triangle sizes instead of a uniform grid.\n"
+		                          "Occasionally produces an oddly steep or spiky triangle —\n"
+		                          "if that happens, just regenerate." );
+		form->addRow( "", jitter_check );
+
 		// Base shape
+		static int s_shape_index = 0; // Flat
 		auto *shape_combo = new ComboBox;
 		shape_combo->addItem( "Flat (None)",      (int)ShapeType::Flat );
 		shape_combo->addItem( "Hill",             (int)ShapeType::Hill );
@@ -178,41 +202,73 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 		shape_combo->addItem( "Valley",           (int)ShapeType::Valley );
 		shape_combo->addItem( "Tunnel",           (int)ShapeType::Tunnel );
 		shape_combo->addItem( "Slope Tunnel",     (int)ShapeType::SlopeTunnel );
-		shape_combo->setCurrentIndex( 0 ); // Flat
+		shape_combo->setCurrentIndex( s_shape_index );
 		form->addRow( "Base Shape:", shape_combo );
 
-		// Shape height — editable spinbox (manual mode or non-slope shapes).
-		// For Slope / Slope Tunnel in Use Selection mode, replaced by a
-		// read-only label derived from the selection brush's Z extent.
-		auto *shape_height_spin = new DoubleSpinBox( 0, 4096, 256, 2, 8 );
+		// Direction for Slope/Ridge/Valley and tunnels; ignored by radially
+		// symmetric shapes.
+		static int s_axis_index = (int)Axis::X;
+		auto *axis_combo = new ComboBox;
+		axis_combo->addItem( "X Axis", (int)Axis::X );
+		axis_combo->addItem( "Y Axis", (int)Axis::Y );
+		axis_combo->setCurrentIndex( s_axis_index );
+		form->addRow( "Axis:", axis_combo );
+
+		// Shape height (relabeled per shape below). Auto-derived from the
+		// selection for Slope/Slope Tunnel in Use Selection mode (see
+		// slope_derived below) — the remembered value only shows otherwise.
+		static double s_shape_height = 256.0;
+		auto *shape_height_spin = new DoubleSpinBox( 0, 4096, s_shape_height, 2, 8 );
 		form->addRow( "Peak Height:", shape_height_spin );
 
 		// Tunnel height — only visible for Slope Tunnel
-		auto *tunnel_height_spin = new DoubleSpinBox( 0, 4096, 256, 2, 8 );
+		static double s_tunnel_height = 256.0;
+		auto *tunnel_height_spin = new DoubleSpinBox( 0, 4096, s_tunnel_height, 2, 8 );
 		form->addRow( "Tunnel Height:", tunnel_height_spin );
 
 		// Terrace step — hidden for Flat
-		auto *terrace_spin = new DoubleSpinBox( 0, 512, 0, 2, 8 );
+		static double s_terrace = 0.0;
+		auto *terrace_spin = new DoubleSpinBox( 0, 512, s_terrace, 2, 8 );
 		form->addRow( "Terrace Step:", terrace_spin );
 
+		// Every generated vertex height snaps to a multiple of this, so it lands
+		// cleanly on the editor's grid for manual editing later.
+		static int s_grid_step_index = 0; // 1
+		auto *grid_step_combo = new ComboBox;
+		for ( int v : { 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024 } )
+			grid_step_combo->addItem( QString::number( v ), v );
+		grid_step_combo->setCurrentIndex( s_grid_step_index );
+		form->addRow( "Grid Step:", grid_step_combo );
+
 		// Noise type
+		static int s_noise_index = 0; // Perlin
 		auto *noise_combo = new ComboBox;
 		noise_combo->addItem( "Perlin Noise",     (int)NoiseType::Perlin );
 		noise_combo->addItem( "Simplex Noise",    (int)NoiseType::Simplex );
 		noise_combo->addItem( "Regular (Random)", (int)NoiseType::Random );
+		noise_combo->setCurrentIndex( s_noise_index );
 		form->addRow( "Noise Type:", noise_combo );
 
 		// Variance / Frequency
-		auto *variance_spin  = new DoubleSpinBox( 0, 1024, 32, 2, 1 );
+		static double s_variance = 32.0, s_frequency = 0.005;
+		auto *variance_spin  = new DoubleSpinBox( 0, 1024, s_variance, 2, 1 );
 		form->addRow( "Variance:", variance_spin );
-		auto *frequency_spin = new DoubleSpinBox( 0.0001, 1.0, 0.005, 4, 0.001 );
+		auto *frequency_spin = new DoubleSpinBox( 0.0001, 1.0, s_frequency, 4, 0.001 );
 		form->addRow( "Frequency:", frequency_spin );
 
-		// Texture — line edit + Pick button to grab from texture browser
+		// Texture — line edit + Pick button to grab from texture browser.
+		// Prefers the live browser selection, then the remembered texture,
+		// then this hardcoded default.
+		const QString DEFAULT_TEXTURE = "textures/";
+		static std::string s_texture;
 		auto *tex_widget = new QWidget;
 		auto *tex_hbox   = new QHBoxLayout( tex_widget );
 		tex_hbox->setContentsMargins( 0, 0, 0, 0 );
-		auto *texture_edit = new QLineEdit( GlobalRadiant().TextureBrowser_getSelectedShader() );
+		const QString browser_shader = GlobalRadiant().TextureBrowser_getSelectedShader();
+		const QString initial_texture = !browser_shader.isEmpty() ? browser_shader
+		                               : !s_texture.empty() ? QString::fromStdString( s_texture )
+		                               : DEFAULT_TEXTURE;
+		auto *texture_edit = new QLineEdit( initial_texture );
 		auto *tex_pick     = new QPushButton( "Pick" );
 		tex_pick->setFixedWidth( 48 );
 		tex_hbox->addWidget( texture_edit );
@@ -243,10 +299,7 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 		} );
 		pick_timer->start();
 
-		// Surface the texture browser and leave it open so the user can keep
-		// picking. Closing it automatically proved fragile and is poor UX.
-		// A tooltip covers the embedded-layout case, where there is no separate
-		// browser window to raise (it's always visible in the main window).
+		// Leave the browser open after picking (auto-closing it was fragile/poor UX).
 		tex_pick->setToolTip( "Open the texture browser to pick a shader.\n"
 		                      "If the browser is docked in the main window layout,\n"
 		                      "select a texture there and it fills in here automatically." );
@@ -255,9 +308,32 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 		} );
 		form->addRow( "Texture:", tex_widget );
 
-		// Generate (generate without closing) + Close
-		// Buttons: Generate (left) — Close (right), explicit layout so the
-		// order is platform-independent.
+		// Resets every remembered setting to its original default. Always
+		// visible (not mode-gated). Target mode is deliberately left alone.
+		auto *reset_btn = new QPushButton( "Reset to Default" );
+		QObject::connect( reset_btn, &QPushButton::clicked, [&](){
+			manual_w_spin->setValue( DEFAULT_MANUAL_W );
+			manual_l_spin->setValue( DEFAULT_MANUAL_L );
+			manual_h_spin->setValue( DEFAULT_MANUAL_H );
+			sq_combo->setCurrentIndex( 3 ); // 64
+			sq_advanced->setChecked( false );
+			step_x_spin->setValue( 64 );
+			step_y_spin->setValue( 64 );
+			jitter_check->setChecked( false );
+			shape_combo->setCurrentIndex( 0 ); // Flat
+			axis_combo->setCurrentIndex( (int)Axis::X );
+			shape_height_spin->setValue( 256.0 );
+			tunnel_height_spin->setValue( 256.0 );
+			terrace_spin->setValue( 0.0 );
+			grid_step_combo->setCurrentIndex( 0 ); // 1
+			noise_combo->setCurrentIndex( 0 ); // Perlin
+			variance_spin->setValue( 32.0 );
+			frequency_spin->setValue( 0.005 );
+			texture_edit->setText( DEFAULT_TEXTURE );
+		} );
+		form->addRow( "", reset_btn );
+
+		// Explicit layout (Generate left, Close right) so order is platform-independent.
 		auto *btn_widget   = new QWidget;
 		auto *btn_layout   = new QHBoxLayout( btn_widget );
 		btn_layout->setContentsMargins( 0, 12, 0, 0 ); // top spacing from fields
@@ -277,12 +353,9 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 				lbl->setVisible( visible );
 		};
 
-		// --- Per-entity persisted footprint size ------------------------------
-		// Generated terrain records the footprint SIZE it was built from as a key
-		// on its func_group(s). On regeneration we reuse that stored size (so the
-		// terrain stops growing) but take the position from the live selection (so
-		// it follows wherever the terrain was moved). The size lives on each piece
-		// of terrain, so a second brush never picks up the first one's size.
+		// Generated terrain stores the footprint size it was built from as a key
+		// on its func_group(s), so regeneration reuses that size (stops growth)
+		// while taking position from the live selection (follows if moved).
 		const char* const TERRAINGEN_KEY = "_terraingen_size";
 
 		// Fills w/l/h and returns true if any selected node (or its parent entity)
@@ -369,11 +442,14 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 			const double step_x    = advanced ? step_x_spin->value() : sq_combo->currentData().toInt();
 			const double step_y    = advanced ? step_y_spin->value() : sq_combo->currentData().toInt();
 			const ShapeType shape  = (ShapeType)shape_combo->currentData().toInt();
+			const Axis      axis   = (Axis)axis_combo->currentData().toInt();
 			const NoiseType noise  = (NoiseType)noise_combo->currentData().toInt();
+			const bool jitter_grid = jitter_check->isChecked();
 			const double tun_height = tunnel_height_spin->value();
 			const double variance     = variance_spin->value();
 			const double frequency    = frequency_spin->value();
 			const double terrace      = terrace_spin->value();
+			const double grid_step    = grid_step_combo->currentData().toInt();
 			const std::string texture_str = texture_edit->text().toStdString();
 			const char* texture       = texture_str.c_str();
 
@@ -389,12 +465,9 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 				target = make_manual_brush_data( manual_w_spin->value(), manual_l_spin->value(), manual_h_spin->value() );
 			}
 			else {
-				// Reuse the stored footprint size (so regeneration doesn't grow),
-				// but take the position from the live selection (so it follows the
-				// terrain if it was moved). Peaks and walls extend symmetrically,
-				// so the live center equals the footprint center; the floor sits at
-				// the live minimum Z. A fresh brush has no stored size and uses its
-				// own bounds directly.
+				// Reuse the stored size but recenter on the live selection (peaks/
+				// walls extend symmetrically, so live center == footprint center).
+				// A fresh brush has no stored size and uses its own bounds directly.
 				double sw, sl, sh;
 				SelBounds s{};
 				if ( read_stored_size( sw, sl, sh ) ) {
@@ -417,12 +490,9 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 					target.min_y = s.y0;
 					target.max_y = s.y1;
 					target.min_z = s.z0;
-					// Base level the terrain builds up from. Slopes use the slope
-					// height so the ramp's top rises with it while its low edge
-					// stays at the floor (z0 + 64); otherwise a steep slope sinks
-					// the low edge below the floor, clips away geometry and makes
-					// regeneration drift sideways. Other shapes use the selection
-					// height.
+					// Slopes use the slope height (so the low edge stays at z0+64
+					// instead of sinking below the floor on a steep drop); other
+					// shapes use the selection height.
 					const bool is_slope = ( shape == ShapeType::Slope || shape == ShapeType::SlopeTunnel );
 					const double top_h  = is_slope ? std::max( shape_height_spin->value(), 64.0 )
 					                               : std::max( s.z1 - s.z0, 64.0 );
@@ -441,19 +511,12 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 				}
 			}
 
-			// For Slope / Slope Tunnel in Use Selection mode, derive the slope
-			// height from the brush's Z extent so the terrain descends from the
-			// top of the brush down to a minimum height of 64 units.
-			// A negative value flips the engine's formula (base_z = height * nx)
-			// so it slopes downward instead of upward.
-			// For Slope/SlopeTunnel in Use Selection mode the spinbox holds the
-			// drop amount (auto-filled from brush Z − 64). Negate it so the
-			// engine formula (base_z = shape_height * nx) slopes downward.
+			// For Slope/SlopeTunnel in Use Selection mode, the spinbox holds the
+			// full brush Z height; negate the drop amount (Z − 64) so the engine
+			// formula (base_z = shape_height * nx) descends to min_z + 64 instead
+			// of ascending.
 			const bool   slope_from_sel = !use_manual
 			                           && ( shape == ShapeType::Slope || shape == ShapeType::SlopeTunnel );
-			// Spinbox shows the full brush Z height. For the downward slope the
-			// engine needs the drop amount (full_z − 64), negated so the
-			// formula base_z = shape_height*nx descends to min_z + 64.
 			const double shape_height   = slope_from_sel
 			                           ? -( shape_height_spin->value() - 64.0 )
 			                           : shape_height_spin->value();
@@ -507,12 +570,12 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 				const double cave_height    = ( shape == ShapeType::SlopeTunnel ) ? tun_height   : shape_height;
 				const double slope_height   = ( shape == ShapeType::SlopeTunnel ) ? shape_height : 0;
 				const double tunnel_terrace = ( shape == ShapeType::SlopeTunnel ) ? terrace      : 0.0;
-				auto maps = generate_tunnel_height_maps( target, step_x, step_y, cave_height, slope_height, variance, frequency, noise, tunnel_terrace );
-				build_tunnel_brushes( target, step_x, step_y, maps, texture, cave_height, slope_height );
+				auto maps = generate_tunnel_height_maps( target, step_x, step_y, cave_height, slope_height, variance, frequency, noise, tunnel_terrace, axis, grid_step );
+				build_tunnel_brushes( target, step_x, step_y, maps, texture, cave_height, slope_height, axis );
 			}
 			else {
-				bool split_diagonally = ( variance > 0 || shape != ShapeType::Flat );
-				auto height_map = generate_height_map( target, step_x, step_y, shape, shape_height, variance, frequency, noise, terrace );
+				bool split_diagonally = ( variance > 0 || shape != ShapeType::Flat || jitter_grid );
+				auto height_map = generate_height_map( target, step_x, step_y, shape, shape_height, variance, frequency, noise, terrace, axis, jitter_grid, grid_step );
 				build_terrain_brushes( target, step_x, step_y, height_map, texture, split_diagonally );
 			}
 
@@ -550,6 +613,11 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 			    && ( st == ShapeType::Slope || st == ShapeType::SlopeTunnel );
 		};
 
+		// Suppressed only for the initial post-restore call below, so a
+		// restored height survives dialog open. Only wired into
+		// update_target_mode — switching shapes never touches this value.
+		bool auto_derive_slope_height = true;
+
 		// Target mode toggle: read-only selection labels vs editable spinboxes.
 		// Refresh labels each time the user switches to "Use Selection" so they
 		// reflect whatever is selected at that moment.
@@ -557,11 +625,9 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 			const bool use_sel = ( idx == 0 );
 			if ( use_sel ) {
 				refresh_sel_labels();
-				if ( slope_derived() ) {
-					// Derive the slope height from the stored footprint height when
-					// the selection has one, so it stays consistent with the size
-					// used for generation. Using the live (grown) selection here
-					// over-steepens the slope and pushes the floor below the base.
+				if ( slope_derived() && auto_derive_slope_height ) {
+					// Prefer the stored footprint height over the live (grown)
+					// selection, which would over-steepen the slope.
 					double sw, sl, sh;
 					if ( read_stored_size( sw, sl, sh ) ) {
 						shape_height_spin->setValue( sh );
@@ -576,9 +642,9 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 			set_row_visible( sel_w_label,   use_sel );
 			set_row_visible( sel_l_label,   use_sel );
 			set_row_visible( sel_h_label,   use_sel );
-			set_row_visible( manual_w_spin, !use_sel );
-			set_row_visible( manual_l_spin, !use_sel );
-			set_row_visible( manual_h_spin, !use_sel );
+			set_row_visible( manual_w_spin,   !use_sel );
+			set_row_visible( manual_l_spin,   !use_sel );
+			set_row_visible( manual_h_spin,   !use_sel );
 		};
 
 		// Advanced sub-square toggle
@@ -588,37 +654,29 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 			set_row_visible( step_y_spin, advanced );
 		};
 
-		// Shape type toggle: labels + visibility
+		// Shape type toggle: labels + visibility only — Axis and shape height
+		// are fully sticky, never reset by a shape switch.
 		auto update_shape = [&]( int idx ){
 			const ShapeType st         = (ShapeType)shape_combo->itemData( idx ).toInt();
 			const bool is_flat         = ( st == ShapeType::Flat );
 			const bool is_slope_tunnel = ( st == ShapeType::SlopeTunnel );
+			const bool is_tunnel_shape = ( st == ShapeType::Tunnel || st == ShapeType::SlopeTunnel );
+			const bool has_axis        = ( st == ShapeType::Slope || st == ShapeType::Ridge || st == ShapeType::Valley
+			                             || is_tunnel_shape );
 
+			set_row_visible( axis_combo, has_axis );
 			set_row_visible( shape_height_spin, !is_flat );
 			if ( !is_flat ) {
 				if ( auto *lbl = qobject_cast<QLabel*>( form->labelForField( shape_height_spin ) ) )
 					lbl->setText( shape_height_label[idx] );
-				// Auto-fill slope height from selection when applicable
-				if ( slope_derived() ) {
-					// Derive the slope height from the stored footprint height when
-					// the selection has one, so it stays consistent with the size
-					// used for generation. Using the live (grown) selection here
-					// over-steepens the slope and pushes the floor below the base.
-					double sw, sl, sh;
-					if ( read_stored_size( sw, sl, sh ) ) {
-						shape_height_spin->setValue( sh );
-					}
-					else {
-						const SelBounds s = query_sel();
-						if ( s.valid )
-							shape_height_spin->setValue( s.z1 - s.z0 );
-					}
-				}
 			}
 			set_row_visible( tunnel_height_spin, is_slope_tunnel );
 			// Terrace not applicable to flat tunnels (no slope to step),
 			// but valid for slope tunnels where the floor descends along Y
 			set_row_visible( terrace_spin, !is_flat && st != ShapeType::Tunnel );
+			// Irregular grid only applies to standard terrain (generate_height_map),
+			// not tunnels.
+			set_row_visible( jitter_check, !is_tunnel_shape );
 		};
 
 		// Wire signals
@@ -626,10 +684,13 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 		QObject::connect( sq_advanced,  &QCheckBox::toggled,                                   update_advanced );
 		QObject::connect( shape_combo,  QOverload<int>::of( &QComboBox::currentIndexChanged ), update_shape );
 
-		// Set initial visibility
+		// Set initial visibility. Slope-height auto-derive is suppressed across
+		// this call so the just-restored height survives dialog open.
+		auto_derive_slope_height = false;
 		update_target_mode( target_combo->currentIndex() );
-		update_advanced( false );
+		update_advanced( sq_advanced->isChecked() );
 		update_shape( shape_combo->currentIndex() );
+		auto_derive_slope_height = true;
 
 		// show() instead of exec() so the dialog is non-modal — the texture
 		// browser panel (and all other Radiant windows) remain interactive
@@ -640,6 +701,25 @@ void dispatch( const char* command, float* vMin, float* vMax, bool bSingleBrush 
 			QObject::connect( &dialog, &QDialog::finished, &loop, &QEventLoop::quit );
 			loop.exec();
 		}
+		s_target_index = target_combo->currentIndex();
+		s_manual_w = manual_w_spin->value();
+		s_manual_l = manual_l_spin->value();
+		s_manual_h = manual_h_spin->value();
+		s_sq_index         = sq_combo->currentIndex();
+		s_advanced         = sq_advanced->isChecked();
+		s_step_x           = step_x_spin->value();
+		s_step_y           = step_y_spin->value();
+		s_jitter           = jitter_check->isChecked();
+		s_shape_index      = shape_combo->currentIndex();
+		s_axis_index       = axis_combo->currentIndex();
+		s_shape_height     = shape_height_spin->value();
+		s_tunnel_height    = tunnel_height_spin->value();
+		s_terrace          = terrace_spin->value();
+		s_grid_step_index  = grid_step_combo->currentIndex();
+		s_noise_index      = noise_combo->currentIndex();
+		s_variance         = variance_spin->value();
+		s_frequency        = frequency_spin->value();
+		s_texture          = texture_edit->text().toStdString();
 		s_active_dialog = nullptr;
 	}
 }

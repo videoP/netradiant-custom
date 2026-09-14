@@ -38,7 +38,7 @@
 #else
 #include <csignal>
 
-#define DEBUGGER_BREAKPOINT() raise( SIGTRAP );
+#define DEBUGGER_BREAKPOINT() ::raise( SIGTRAP ); // ::raise for Raspberry Pi
 #endif
 
 #define STR( x )  # x
