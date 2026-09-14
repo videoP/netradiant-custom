@@ -61,6 +61,22 @@ extern LatchedBool g_largemap_shareShaderNames;
  */
 extern LatchedBool g_largemap_poolFaces;
 
+/*! \brief Take the short-cuts through map parsing: the tokeniser's fast path
+    and the allocation-free shader-cache lookup.
+
+    Neither changes what is produced - the tokeniser was checked token for token
+    against the stock one over 215 million tokens, and the shader lookup is the
+    same hash table probed without building a string to probe with. This exists
+    so that if a map ever reads oddly, it can be ruled in or out in one restart
+    rather than by rebuilding.
+
+    Note it does not cover the number parsing in libs/stringio.h, which is
+    compiled into the module DLLs as well and so cannot be switched at runtime
+    without adding to the module ABI. That one has a compile-time switch at the
+    top of the file.
+ */
+extern LatchedBool g_largemap_fastParse;
+
 /*! \brief Pass -cullgrid to q3map2, so that its CullSides stage pairs brushes
     through a spatial grid instead of testing every brush against every other.
 

@@ -6,6 +6,7 @@
 
 #include "stringio.h"
 #include "preferencesystem.h"
+#include "script/scripttokeniser.h" // g_scriptTokeniser_fastPath
 
 #include <QCheckBox>
 
@@ -15,6 +16,7 @@ LatchedBool g_largemap_staticBatch( false, "Batched static geometry" );
 LatchedBool g_largemap_incrementalBounds( false, "Cached container bounds" );
 LatchedBool g_largemap_shareShaderNames( false, "Shared shader names" );
 LatchedBool g_largemap_poolFaces( false, "Pooled face allocation" );
+LatchedBool g_largemap_fastParse( false, "Fast map parsing" );
 
 /* not latched: these are only ever read when a build command is assembled */
 bool g_largemap_cullGrid = false;
@@ -102,6 +104,21 @@ void LargeMap_constructPreferences( PreferencesPage& page ){
 	    "which suits an editor, since the peak is reached when the map loads."
 	);
 	page.appendCheckBox(
+	    "Load", "Fast map parsing",
+	    LatchedImportCaller( g_largemap_fastParse ),
+	    BoolExportCaller( g_largemap_fastParse.m_latched )
+	)->setToolTip(
+	    "Reads .map files considerably faster.\n\n"
+	    "Recognising a word in the file normally costs an indirect function call\n"
+	    "for every single character, and looking up the shader on each face builds\n"
+	    "a temporary copy of its name just to search with. This reads whole words\n"
+	    "straight out of the file buffer and searches without the copy.\n\n"
+	    "Measured on a 1 GB map: parsing went from 23.7s to 13.1s.\n\n"
+	    "It produces exactly the same result - the two were compared word for word\n"
+	    "over 215 million words of a real map. The switch is here so that if a map\n"
+	    "ever loads oddly, this can be ruled out in one restart."
+	);
+	page.appendCheckBox(
 	    "Compile", "Gridded CullSides (q3map2 -cullgrid)",
 	    g_largemap_cullGrid
 	)->setToolTip(
@@ -178,6 +195,11 @@ void LargeMap_Construct(){
 	    BoolExportStringCaller( g_largemap_staticBatch.m_latched )
 	);
 	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapFastParse",
+	    makeBoolStringImportCallback( LatchedAssignCaller( g_largemap_fastParse ) ),
+	    BoolExportStringCaller( g_largemap_fastParse.m_latched )
+	);
+	GlobalPreferenceSystem().registerPreference(
 	    "LargeMapCullGrid",
 	    BoolImportStringCaller( g_largemap_cullGrid ),
 	    BoolExportStringCaller( g_largemap_cullGrid )
@@ -187,6 +209,10 @@ void LargeMap_Construct(){
 	    BoolImportStringCaller( g_largemap_tjGrid ),
 	    BoolExportStringCaller( g_largemap_tjGrid )
 	);
+
+	/* The tokeniser lives in libs/ and cannot see this header, so the latched
+	   value is pushed to it once, here, after preferences have been read. */
+	g_scriptTokeniser_fastPath = g_largemap_fastParse.m_value;
 
 	LargeMap_registerPreferencesPage();
 }

@@ -319,6 +319,10 @@ struct HashString
 	hash_type operator()( const CopiedString& string ) const {
 		return string_hash( string.c_str() );
 	}
+	/// \brief Same hash without having to build a CopiedString to ask with.
+	hash_type operator()( const char* string ) const {
+		return string_hash( string );
+	}
 };
 
 struct HashStringNoCase

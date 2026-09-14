@@ -228,7 +228,8 @@ private:
 	Bucket& getBucket( hash_type hash ){
 		return m_buckets[getBucketId( hash )];
 	}
-	BucketNode* bucket_find( Bucket bucket, hash_type hash, const Key& key ){
+	template<typename OtherKey>
+	BucketNode* bucket_find( Bucket bucket, hash_type hash, const OtherKey& key ){
 		std::size_t bucketId = getBucketId( hash );
 		for ( iterator i( bucket ); i != end(); ++i )
 		{
@@ -325,6 +326,28 @@ public:
 	/// \brief Returns an iterator pointing to the value associated with \p key if it is contained by the hash-table, else \c end().
 	iterator find( const Key& key ){
 		hash_type hash = hashKey( key );
+		if ( m_bucketCount != 0 ) {
+			Bucket bucket = getBucket( hash );
+			if ( bucket != 0 ) {
+				BucketNode* node = bucket_find( bucket, hash, key );
+				if ( node != 0 ) {
+					return iterator( node );
+				}
+			}
+		}
+
+		return end();
+	}
+	/*! \brief find(), for a key that hashes and compares equal to a Key without
+	    having to be turned into one first.
+
+	    Hasher and KeyEqual must both accept OtherKey and answer the same as they
+	    would for the equivalent Key. Lets a CopiedString-keyed table be probed
+	    with a plain const char*, which is a malloc/free pair saved per lookup.
+	 */
+	template<typename OtherKey>
+	iterator find_other( const OtherKey& key ){
+		const hash_type hash = Hasher::operator()( key );
 		if ( m_bucketCount != 0 ) {
 			Bucket bucket = getBucket( hash );
 			if ( bucket != 0 ) {

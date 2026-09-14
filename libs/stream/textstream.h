@@ -402,6 +402,21 @@ public:
 		c = *m_cur++;
 		return true;
 	}
+
+	/* A caller that wants a run of characters rather than one can take them
+	   straight out of the buffer. ScriptTokeniser does this for token bodies,
+	   which are most of a .map file; going through readChar for each of them
+	   costs a call and two bounds tests per byte. */
+	const char* cur() const {
+		return m_cur;
+	}
+	const char* end() const {
+		return m_end;
+	}
+	void advance( std::size_t count ){
+		m_cur += count;
+	}
+
 	// looks forward for map format (valve220) detection
 	bool bufferContains( const char* str ){
 		const size_t shift = m_cur - m_buffer;
@@ -409,7 +424,12 @@ public:
 		m_cur = m_buffer;
 		m_end -= shift;
 		m_end += m_inputStream.read( m_end, shift ); //fill freed space in the end
-		return std::search( m_cur, m_end, str, str + strlen( str ) ) != m_end;
+		/* Window held at 1024 whatever SIZE is: this asks whether the primitive
+		   being read is a valve220 one, and a wider look-ahead would start
+		   matching against later primitives instead. */
+		const std::size_t c_window = 1024;
+		char* const last = ( static_cast<std::size_t>( m_end - m_cur ) > c_window ) ? m_cur + c_window : m_end;
+		return std::search( m_cur, last, str, str + strlen( str ) ) != last;
 	}
 };
 

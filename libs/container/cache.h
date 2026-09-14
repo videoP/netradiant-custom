@@ -94,7 +94,9 @@ public:
 template<typename Key, typename Cached, typename Hasher, typename KeyEqual = std::equal_to<Key>, typename CreationPolicy = DefaultCreationPolicy<Cached, Key> >
 class HashedCache : public CreationPolicy
 {
+public:
 	typedef SharedValue<Cached> Element;
+private:
 	typedef HashTable<Key, Element, Hasher, KeyEqual> map_type;
 
 	map_type m_map;
@@ -123,6 +125,33 @@ public:
 
 	iterator find( const Key& key ){
 		return m_map.find( key );
+	}
+
+	/*! \brief capture(), for a key the table can be probed with directly.
+
+	    Returns null when nothing is cached under \p key yet; the caller falls
+	    back to capture() to have one constructed. An element that is in the
+	    table always holds a value, since release() erases it at a count of
+	    zero - so a hit here needs no construction, only the reference.
+	 */
+	template<typename OtherKey>
+	Element* capture_existing( const OtherKey& key ){
+		const iterator i = m_map.find_other( key );
+		if ( i == m_map.end() ) {
+			return 0;
+		}
+		( *i ).value.increment();
+		return &( *i ).value;
+	}
+	/// \brief release(), for a key the table can be probed with directly.
+	template<typename OtherKey>
+	bool release_existing( const OtherKey& key ){
+		const iterator i = m_map.find_other( key );
+		if ( i == m_map.end() ) {
+			return false;
+		}
+		release( i );
+		return true;
 	}
 
 	void capture( iterator i ){

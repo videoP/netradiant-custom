@@ -10,6 +10,7 @@
 
 #include <unordered_set>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <algorithm>
 
@@ -20,8 +21,31 @@ namespace
    That is what lets the release paths below decide which scheme was used
    without recording it per allocation. */
 
-std::unordered_set<std::string>& shaderNames(){
-	static std::unordered_set<std::string> names; // node-based, so c_str() stays put
+/* Transparent so the table can be probed with the caller's const char* as-is.
+   emplace() would otherwise build a std::string to look with and throw it away
+   again on every hit, which is a malloc/free pair per face - and a hit is what
+   nearly every lookup is, since a map names a handful of shaders across
+   millions of faces. */
+struct ShaderNameHash
+{
+	using is_transparent = void;
+	std::size_t operator()( const std::string_view name ) const {
+		return std::hash<std::string_view>()( name );
+	}
+};
+
+struct ShaderNameEqual
+{
+	using is_transparent = void;
+	bool operator()( const std::string_view one, const std::string_view other ) const {
+		return one == other;
+	}
+};
+
+typedef std::unordered_set<std::string, ShaderNameHash, ShaderNameEqual> ShaderNames;
+
+ShaderNames& shaderNames(){
+	static ShaderNames names; // node-based, so c_str() stays put
 	return names;
 }
 
@@ -41,7 +65,12 @@ const char* ShaderName_store( const char* name ){
 	if ( !g_largemap_shareShaderNames.m_value ) {
 		return string_clone( name );
 	}
-	return shaderNames().emplace( name ).first->c_str();
+	ShaderNames& names = shaderNames();
+	const auto i = names.find( std::string_view( name ) );
+	if ( i != names.end() ) {
+		return i->c_str();
+	}
+	return names.emplace( name ).first->c_str();
 }
 
 void ShaderName_release( const char* name ){

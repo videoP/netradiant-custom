@@ -24,6 +24,10 @@
 #include "script/scripttokeniser.h"
 #include "script/scripttokenwriter.h"
 
+/* Declared in scripttokeniser.h; this is the only translation unit that builds
+   a ScriptTokeniser, so it owns the definition. Set by LargeMap_Construct. */
+bool g_scriptTokeniser_fastPath = false;
+
 class ScriptLibraryAPI
 {
 	_QERScripLibTable m_scriptlibrary;

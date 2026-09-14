@@ -43,6 +43,7 @@
 #include "string/string.h"
 #include "container/hashfunc.h"
 #include "container/cache.h"
+#include "largemap.h"
 #include "generic/reference.h"
 #include "moduleobservers.h"
 #include "stream/filestream.h"
@@ -850,7 +851,23 @@ class OpenGLShaderCache final : public ShaderCache, public TexturesCacheObserver
 		}
 	};
 
-	typedef HashedCache<CopiedString, OpenGLShader, HashString, std::equal_to<CopiedString>, CreateOpenGLShader> Shaders;
+	/*! \brief Equality that also answers for a plain const char*.
+
+	    Every brush face captures and releases by name - three times each during
+	    a map load - and std::equal_to<CopiedString> forced each of those to
+	    build a CopiedString purely to look with, then free it again. On a 6.8M
+	    face map that was twenty million malloc/free pairs. See capture(). */
+	struct ShaderNameEqual
+	{
+		bool operator()( const CopiedString& one, const CopiedString& other ) const {
+			return string_equal( one.c_str(), other.c_str() );
+		}
+		bool operator()( const CopiedString& one, const char* other ) const {
+			return string_equal( one.c_str(), other );
+		}
+	};
+
+	typedef HashedCache<CopiedString, OpenGLShader, HashString, ShaderNameEqual, CreateOpenGLShader> Shaders;
 	Shaders m_shaders;
 	std::size_t m_unrealised;
 
@@ -880,13 +897,27 @@ public:
 #if DEBUG_SHADERS
 		globalOutputStream() << "shaders capture: " << Quoted( name ) << '\n';
 #endif
-		return m_shaders.capture( name ).get();
+		/* Probe with the name as given; only a name never seen before pays for a
+		   CopiedString. A map load is millions of hits and a handful of misses. */
+		if ( g_largemap_fastParse.m_value ) {
+			if ( Shaders::Element* element = m_shaders.capture_existing( name ) ) {
+				return element->get();
+			}
+		}
+		return m_shaders.capture( CopiedString( name ) ).get();
 	}
 	void release( const char *name ) override {
 #if DEBUG_SHADERS
 		globalOutputStream() << "shaders release: " << Quoted( name ) << '\n';
 #endif
-		m_shaders.release( name );
+		if ( g_largemap_fastParse.m_value ) {
+			if ( m_shaders.release_existing( name ) ) {
+				return;
+			}
+			ASSERT_MESSAGE( false, "releasing a non-existent shader\n" );
+			return;
+		}
+		m_shaders.release( CopiedString( name ) );
 	}
 	void render( RenderStateFlags globalstate, const Matrix4& modelview, const Matrix4& projection, const Vector3& viewer ) override {
 		gl().glMatrixMode( GL_PROJECTION );

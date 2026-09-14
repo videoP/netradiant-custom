@@ -23,6 +23,17 @@
 
 #include "iscriplib.h"
 
+#include <cstring>
+
+/*! \brief Whether tokenise() may take the fast path below.
+
+    Defined in radiant/parse.cpp, which is the only place a ScriptTokeniser is
+    ever constructed, and set from the Large Maps preferences. Off restores the
+    stock state machine byte for byte, so a map that reads oddly can be checked
+    against it without a rebuild.
+ */
+extern bool g_scriptTokeniser_fastPath;
+
 class ScriptTokeniser final : public Tokeniser
 {
 	enum CharType
@@ -38,9 +49,14 @@ class ScriptTokeniser final : public Tokeniser
 
 	typedef bool ( ScriptTokeniser::*Tokenise )( char c );
 
+	/* 64k rather than 1k: a 1 GB map is a million refills at the smaller size,
+	   and the fast path below consumes straight out of this buffer, so a bigger
+	   one also means fewer trips back through readChar. */
+	static const int c_bufferSize = 64 * 1024;
+
 	Tokenise m_stack[3];
 	Tokenise* m_state;
-	SingleCharacterInputStream<TextInputStream> m_istream;
+	SingleCharacterInputStream<TextInputStream, c_bufferSize> m_istream;
 	std::size_t m_scriptline;
 	std::size_t m_scriptcolumn;
 
@@ -58,7 +74,15 @@ class ScriptTokeniser final : public Tokeniser
 	const char m_specialCommentSig[4] = "@$&";
 	const char *m_specialCommentRead;
 
-	CharType charType( const char c ){
+	/* charType() was a switch per character, and the state machine asks it for
+	   every byte of the input. m_special is fixed for the life of the tokeniser,
+	   so the whole answer can be tabulated once. m_tokenBody records the same
+	   table's "this character continues a token" answer, which is the test the
+	   fast path runs per byte. */
+	unsigned char m_charType[256];
+	bool m_tokenBody[256];
+
+	static CharType charTypeOf( const char c, const bool special ){
 		switch ( c )
 		{
 		case '\n':
@@ -77,13 +101,32 @@ class ScriptTokeniser final : public Tokeniser
 		case ']':
 		case ',':
 		case ':':
-			return ( m_special ) ? eCharSpecial : eCharToken;
+			return ( special ) ? eCharSpecial : eCharToken;
 		}
 
 		if ( c > 32 ) {
 			return eCharToken;
 		}
 		return eWhitespace;
+	}
+
+	void buildCharTypes(){
+		for ( int i = 0; i < 256; ++i )
+		{
+			const CharType type = charTypeOf( static_cast<char>( i ), m_special );
+			m_charType[i] = static_cast<unsigned char>( type );
+			/* Exactly the set tokeniseToken() adds rather than emits on. Solidus
+			   is in it because MID_TOKEN_COMMENTS is off, so a '/' mid-token
+			   falls through to the add cases. */
+			m_tokenBody[i] = ( type == eCharToken || type == eCharStar || type == eCharSolidus );
+		}
+	}
+
+	CharType charType( const char c ){
+		return static_cast<CharType>( m_charType[ static_cast<unsigned char>( c ) ] );
+	}
+	bool isTokenBody( const char c ) const {
+		return m_tokenBody[ static_cast<unsigned char>( c ) ];
 	}
 
 	Tokenise state(){
@@ -101,6 +144,16 @@ class ScriptTokeniser final : public Tokeniser
 		if ( m_write < m_token + MAXTOKEN - 1 ) {
 			*m_write++ = c;
 		}
+	}
+	/// \brief add() over a run. Overflow is truncated, exactly as add() drops it.
+	void append( const char* first, const char* last ){
+		std::size_t count = last - first;
+		const std::size_t room = ( m_token + MAXTOKEN - 1 ) - m_write;
+		if ( count > room ) {
+			count = room;
+		}
+		std::memcpy( m_write, first, count );
+		m_write += count;
 	}
 	void remove(){
 		ASSERT_MESSAGE( m_write > m_token, "no char to remove" );
@@ -281,9 +334,108 @@ class ScriptTokeniser final : public Tokeniser
 		return true;
 	}
 
+	/*! \brief The common case, taken straight out of the input buffer.
+
+	    Nearly every byte of a .map file is either a separator or part of an
+	    ordinary token, and recognising that through the state machine costs an
+	    indirect call through a pointer-to-member, a switch, and a readChar per
+	    byte. Measured on a 1 GB map: tokenising ran at ~44 MB/s.
+
+	    Only the cases whose behaviour is obvious are handled here. Quotes,
+	    comments, special characters and a newline where one is not allowed all
+	    return eDefer, and the state machine deals with them exactly as before -
+	    so the error messages, line/column numbers and token contents are
+	    unchanged, and the awkward parts of the grammar have no second
+	    implementation to keep in step.
+
+	    Returns eToken if m_token now holds one, eEnd at end of input.
+	 */
+	enum FastResult { eDefer, eToken, eEnd };
+
+	FastResult tokeniseFast(){
+#if MID_TOKEN_COMMENTS
+		return eDefer; // m_tokenBody assumes a mid-token '/' just extends the token
+#else
+		// separators
+		for (;; )
+		{
+			if ( m_eof ) {
+				return eEnd;
+			}
+			const char c = m_current;
+			if ( c == '\n' ) {
+				if ( !m_crossline ) {
+					return eDefer; // the state machine reports this
+				}
+				++m_scriptline;
+				m_scriptcolumn = 1;
+			}
+			else if ( charType( c ) == eWhitespace ) {
+				++m_scriptcolumn;
+			}
+			else if ( charType( c ) == eCharToken ) {
+				break; // start of an ordinary token
+			}
+			else{
+				return eDefer; // quote, solidus, star, special
+			}
+			m_eof = !m_istream.readChar( m_current );
+		}
+
+		add( m_current );
+		++m_scriptcolumn;
+
+		// body
+		for (;; )
+		{
+			const char* const first = m_istream.cur();
+			const char* const last = m_istream.end();
+			const char* p = first;
+			while ( p != last && isTokenBody( *p ) )
+			{
+				++p;
+			}
+
+			append( first, p );
+			m_scriptcolumn += p - first;
+			m_istream.advance( p - first );
+
+			if ( !m_istream.readChar( m_current ) ) {
+				m_eof = true;   // the state machine also emits what it has at eof
+				return eToken;
+			}
+			if ( p != last ) {
+				/* A terminator, left unconsumed and uncounted - the state
+				   machine emits before advancing past it too, so the next call
+				   sees it as the first character in the default state. */
+				return eToken;
+			}
+			// ran out of buffer mid-token; readChar refilled it
+			if ( !isTokenBody( m_current ) ) {
+				return eToken;
+			}
+			add( m_current );
+			++m_scriptcolumn;
+		}
+#endif
+	}
+
 	/// Returns true if a token was successfully parsed.
 	bool tokenise(){
 		m_write = m_token;
+
+		if ( g_scriptTokeniser_fastPath && m_state == m_stack ) { // nothing pushed: the fast path's assumption
+			switch ( tokeniseFast() )
+			{
+			case eToken:
+				return true;
+			case eEnd:
+				return m_write != m_token;
+			case eDefer:
+				break;
+			}
+		}
+
 		while ( !eof() )
 		{
 			char c = m_current;
@@ -336,6 +488,7 @@ public:
 		m_emit( false ),
 		m_special( special ),
 		m_specialComments( specialComments ){
+		buildCharTypes();
 		m_stack[0] = Tokenise( &ScriptTokeniser::tokeniseDefault );
 		m_eof = !m_istream.readChar( m_current );
 		m_token[MAXTOKEN - 1] = '\0';

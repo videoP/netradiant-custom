@@ -23,6 +23,8 @@
 
 #include <cstdlib>
 #include <cctype>
+#include <cstdint>
+#include <limits>
 
 #include "generic/vector.h"
 #include "iscriplib.h"
@@ -134,12 +136,173 @@ inline bool string_is_float_zero( const char* string ){
 	return string_empty( string );
 }
 
+/*! \brief Whether to take the short-cut in buffer_parse_floating_literal and
+    buffer_parse_signed_decimal_integer_literal below.
+
+    Compile-time rather than a Large Maps checkbox, deliberately: this header is
+    compiled into the module DLLs (entity, mapq3, shaders, md3model) as well as
+    radiant.exe, so a runtime switch would have to be reachable across the
+    module boundary and that means adding to the module ABI for a diagnostic.
+    Set to 0 and rebuild to fall back to strtod/strtol everywhere.
+ */
+#define RADIANT_FAST_NUMBER_PARSE 1
+
+/*! \brief strtod, short-cut for the shape of number a .map file is made of.
+
+    strtod is locale-aware and completely general, and measures at ~96ns a call
+    here. A brush face costs eighteen of them - nine plane coordinates, six
+    texdef values, three flags - so a 6.8M face map spends about twelve seconds
+    inside it, which was most of the time attributed to "tokenise".
+
+    This reads [+-]digits[.digits][(e|E)[+-]digits] directly and hands anything
+    else - leading whitespace, hex, inf, nan, more precision than the shortcut
+    can hold - straight to strtod, from the original position, so those keep
+    their existing behaviour exactly.
+
+    The shortcut is exact rather than approximate. A mantissa of 2^53 or less is
+    held exactly by a double, and so is 10^n for |n| <= 22; one IEEE multiply or
+    divide of two exact values is correctly rounded, which is the same value
+    strtod is required to produce. Outside either bound it does not try. Every
+    coordinate and texdef in a .map is well inside both.
+ */
 inline double buffer_parse_floating_literal( const char*& buffer ){
+#if !RADIANT_FAST_NUMBER_PARSE
 	return strtod( buffer, const_cast<char**>( &buffer ) );
+#else
+	const char* p = buffer;
+
+	bool negative = false;
+	if ( *p == '-' ) {
+		negative = true;
+		++p;
+	}
+	else if ( *p == '+' ) {
+		++p;
+	}
+
+	if ( p[0] == '0' && ( p[1] == 'x' || p[1] == 'X' ) ) {
+		return strtod( buffer, const_cast<char**>( &buffer ) ); // hex float literal
+	}
+
+	std::uint64_t mantissa = 0;
+	int significant = 0;  // digits accumulated into mantissa, leading zeros excluded
+	int exponent = 0;     // power of ten still to apply
+	bool anyDigits = false;
+
+	for ( ; *p >= '0' && *p <= '9'; ++p )
+	{
+		anyDigits = true;
+		if ( mantissa != 0 || *p != '0' ) {
+			if ( ++significant > 19 ) {
+				return strtod( buffer, const_cast<char**>( &buffer ) );
+			}
+			mantissa = mantissa * 10 + static_cast<unsigned>( *p - '0' );
+		}
+	}
+
+	if ( *p == '.' ) {
+		++p;
+		for ( ; *p >= '0' && *p <= '9'; ++p )
+		{
+			anyDigits = true;
+			--exponent;
+			if ( mantissa != 0 || *p != '0' ) {
+				if ( ++significant > 19 ) {
+					return strtod( buffer, const_cast<char**>( &buffer ) );
+				}
+				mantissa = mantissa * 10 + static_cast<unsigned>( *p - '0' );
+			}
+		}
+	}
+
+	if ( !anyDigits ) {
+		return strtod( buffer, const_cast<char**>( &buffer ) ); // inf, nan, hex, "." , whitespace
+	}
+
+	if ( *p == 'e' || *p == 'E' ) {
+		const char* q = p + 1;
+		int exponentSign = 1;
+		if ( *q == '-' ) {
+			exponentSign = -1;
+			++q;
+		}
+		else if ( *q == '+' ) {
+			++q;
+		}
+		if ( *q >= '0' && *q <= '9' ) {
+			int value = 0;
+			for ( ; *q >= '0' && *q <= '9'; ++q )
+			{
+				if ( value < 1000 ) { // no need for more; it is out of range either way
+					value = value * 10 + ( *q - '0' );
+				}
+			}
+			exponent += exponentSign * value;
+			p = q;
+		}
+		/* else: not a valid exponent, so the number ends before the 'e' - which
+		   is what strtod does too. */
+	}
+
+	if ( exponent < -22 || exponent > 22 || mantissa > ( std::uint64_t( 1 ) << 53 ) ) {
+		return strtod( buffer, const_cast<char**>( &buffer ) );
+	}
+
+	static const double c_pow10[23] = {
+		1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
+		1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
+	};
+
+	double value = static_cast<double>( mantissa );
+	value = ( exponent >= 0 ) ? value * c_pow10[exponent] : value / c_pow10[-exponent];
+
+	buffer = p;
+	return negative ? -value : value;
+#endif
 }
 
+/// \brief strtol, short-cut the same way. See buffer_parse_floating_literal.
 inline int buffer_parse_signed_decimal_integer_literal( const char*& buffer ){
+#if !RADIANT_FAST_NUMBER_PARSE
 	return strtol( buffer, const_cast<char**>( &buffer ), 10 );
+#else
+	const char* p = buffer;
+
+	bool negative = false;
+	if ( *p == '-' ) {
+		negative = true;
+		++p;
+	}
+	else if ( *p == '+' ) {
+		++p;
+	}
+
+	if ( !( *p >= '0' && *p <= '9' ) ) {
+		return strtol( buffer, const_cast<char**>( &buffer ), 10 );
+	}
+
+	std::uint64_t value = 0;
+	for ( ; *p >= '0' && *p <= '9'; ++p )
+	{
+		value = value * 10 + static_cast<unsigned>( *p - '0' );
+		if ( value > 0x80000000u ) { // overflow, which strtol saturates and errno-flags
+			return strtol( buffer, const_cast<char**>( &buffer ), 10 );
+		}
+	}
+	if ( value > ( negative ? 0x80000000u : 0x7fffffffu ) ) {
+		return strtol( buffer, const_cast<char**>( &buffer ), 10 );
+	}
+
+	buffer = p;
+	if ( negative ) {
+		/* Converting 0x80000000 to int commonly produces INT_MIN, whose unary
+		   negation is signed overflow. Construct that one result explicitly. */
+		return value == 0x80000000u
+		     ? std::numeric_limits<int>::min()
+		     : -static_cast<int>( value );
+	}
+	return static_cast<int>( value );
+#endif
 }
 
 inline int buffer_parse_unsigned_decimal_integer_literal( const char*& buffer ){
