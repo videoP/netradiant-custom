@@ -2957,8 +2957,23 @@ int LightMain( Args& args ){
 	/* set the entity/model origins and init yDrawVerts */
 	SetEntityOrigins();
 
+	/* worldspawn fallback for liquid brushes whose content shader sets no absorption.
+	   the common case is stock system/caulk_water, which a mapper should not be editing.
+	   three values first, since one value parses out of three but not the reverse. */
+	float absorptionScale;
+	bool gotAbsorption = entities[ 0 ].read_keyvalue( waterAbsorptionDistance, "_waterAbsorptionDistance" );
+	if ( !gotAbsorption && entities[ 0 ].read_keyvalue( absorptionScale, "_waterAbsorptionDistance" ) ) {
+		waterAbsorptionDistance = LightAbsorptionDistanceFromScale( absorptionScale );
+		gotAbsorption = true;
+	}
+	if ( gotAbsorption ) {
+		Sys_Printf( "Water light absorption 1/e distance: %.0f %.0f %.0f\n",
+		            waterAbsorptionDistance[ 0 ], waterAbsorptionDistance[ 1 ], waterAbsorptionDistance[ 2 ] );
+	}
+
 	/* ydnar: set up optimization */
 	SetupBrushes();
+	SetupWaterBrushes();
 	SetupDirt();
 	SetupFloodLight();
 	SetupSurfaceLightmaps();

@@ -3256,6 +3256,115 @@ void SetupBrushes(){
 
 
 /*
+   BoundBSPBrush()
+   conservative aabb of a bsp brush, from the intersections of every triple of its
+   (outward facing) side planes that lies inside all the others. exact for convex
+   brushes, which is all a bsp brush can be. returns false if degenerate.
+ */
+
+static bool BoundBSPBrush( const bspBrush_t& brush, MinMax& minmax ){
+	const Span<const bspBrushSide_t> sides( &bspBrushSides[ brush.firstSide ], brush.numSides );
+
+	minmax.clear();
+
+	for ( int i = 0; i < brush.numSides; ++i )
+	{
+		const bspPlane_t& pi = bspPlanes[ sides[ i ].planeNum ];
+		for ( int j = i + 1; j < brush.numSides; ++j )
+		{
+			const bspPlane_t& pj = bspPlanes[ sides[ j ].planeNum ];
+			for ( int k = j + 1; k < brush.numSides; ++k )
+			{
+				const bspPlane_t& pk = bspPlanes[ sides[ k ].planeNum ];
+
+				/* solve the 3x3 by cramer's rule */
+				const Vector3 cjk = vector3_cross( pj.normal(), pk.normal() );
+				const double det = vector3_dot( pi.normal(), cjk );
+				if ( fabs( det ) < 1e-6 ) {
+					continue;   /* two or more planes parallel, no unique corner */
+				}
+
+				const Vector3 point = ( cjk * pi.dist()
+				                      + vector3_cross( pk.normal(), pi.normal() ) * pj.dist()
+				                      + vector3_cross( pi.normal(), pj.normal() ) * pk.dist() ) / det;
+
+				/* keep it only if it is a corner of the brush, not of the unbounded plane set */
+				bool inside = true;
+				for ( const bspBrushSide_t& side : sides )
+				{
+					if ( plane3_distance_to_point( bspPlanes[ side.planeNum ], point ) > 0.1 ) {
+						inside = false;
+						break;
+					}
+				}
+				if ( inside ) {
+					minmax.extend( point );
+				}
+			}
+		}
+	}
+
+	return minmax.valid();
+}
+
+
+
+/*
+   SetupWaterBrushes()
+   builds the list of liquid brushes that absorb light, so TraceLine() can attenuate
+   by the distance a light path actually spends submerged.
+
+   the absorption coefficients come from q3map_lightAbsorptionDistance on the brush's
+   content shader, falling back to worldspawn _waterAbsorptionDistance. that fallback
+   matters because the usual way to build water is stock system/caulk_water, which a
+   mapper has no business editing.
+ */
+
+void SetupWaterBrushes(){
+	waterBrushes.clear();
+	waterBrushesMinMax.clear();
+
+	/* walk the list of worldspawn brushes */
+	for ( int i = 0; i < bspModels[ 0 ].numBSPBrushes; ++i )
+	{
+		const bspBrush_t& brush = bspBrushes[ bspModels[ 0 ].firstBSPBrush + i ];
+
+		/* brush.shaderNum is the shader that determines the content flags */
+		const shaderInfo_t *si = ShaderInfoForShaderNull( bspShaders[ brush.shaderNum ].shader );
+		if ( si == nullptr || !( si->compileFlags & C_LIQUID ) ) {
+			continue;
+		}
+
+		/* shader key wins over the worldspawn fallback */
+		const Vector3& distance = ( si->lightAbsorptionDistance != g_vector3_identity )
+		                          ? si->lightAbsorptionDistance
+		                          : waterAbsorptionDistance;
+
+		/* a 1/e distance of 0 means "no absorption on this channel" */
+		const Vector3 extinction( distance[ 0 ] > 0 ? 1.0f / distance[ 0 ] : 0.0f,
+		                          distance[ 1 ] > 0 ? 1.0f / distance[ 1 ] : 0.0f,
+		                          distance[ 2 ] > 0 ? 1.0f / distance[ 2 ] : 0.0f );
+		if ( extinction == g_vector3_identity ) {
+			continue;
+		}
+
+		MinMax minmax;
+		if ( !BoundBSPBrush( brush, minmax ) ) {
+			continue;
+		}
+
+		waterBrushes.push_back( waterBrush_t{ minmax, brush.firstSide, brush.numSides, extinction } );
+		waterBrushesMinMax.extend( minmax );
+	}
+
+	if ( !waterBrushes.empty() ) {
+		Sys_Printf( "%9zu light absorbing brushes\n", waterBrushes.size() );
+	}
+}
+
+
+
+/*
    ChopBounds()
    chops a bounding box by the plane defined by origin and normal
    returns false if the bounds is entirely clipped away

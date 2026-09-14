@@ -1487,11 +1487,104 @@ static bool TraceLine_r( int nodeNum, const Vector3& origin, const Vector3& end,
 
 
 /*
+   TraceLineWaterAbsorption()
+   attenuates the trace colour by how far the light path travels submerged.
+
+   the liquid brushes are not in the trace tree at all - water surfaces are dropped by
+   PopulateWithBSPModel() as translucent, and the usual way to build a water volume is
+   system/caulk_water, which is nodraw and so never becomes a drawsurface either. so
+   this clips the segment against the brush volumes directly.
+
+   beer-lambert over the submerged length, which means a low sun correctly travels
+   further through the water than a high one, and a light source inside the water pays
+   absorption over its own path out.
+ */
+
+static void TraceLineWaterAbsorption( trace_t *trace ){
+	/* conservative aabb of the segment, for cheap rejection */
+	MinMax segmentMinMax;
+	segmentMinMax.extend( trace->origin );
+	segmentMinMax.extend( trace->end );
+
+	/* union bounds reject: most traces on most maps never go near the water */
+	if ( !waterBrushesMinMax.test( segmentMinMax ) ) {
+		return;
+	}
+
+	float submerged = 0;
+	Vector3 extinction( 0 );
+
+	for ( const waterBrush_t& wb : waterBrushes )
+	{
+		/* per brush bounds reject */
+		if ( !wb.minmax.test( segmentMinMax ) ) {
+			continue;
+		}
+
+		/* clip the segment against the brush's outward facing planes */
+		float enter = 0;
+		float exit = trace->distance;
+
+		for ( const bspBrushSide_t& side : Span( &bspBrushSides[ wb.firstSide ], wb.numSides ) )
+		{
+			const bspPlane_t& plane = bspPlanes[ side.planeNum ];
+			const float dist = plane3_distance_to_point( plane, trace->origin );
+			const float denom = vector3_dot( plane.normal(), trace->direction );
+
+			if ( fabs( denom ) < 1e-6f ) {
+				/* parallel to this plane: either wholly outside it or unconstrained by it */
+				if ( dist > 0 ) {
+					enter = exit;   /* forces the miss test below */
+					break;
+				}
+				continue;
+			}
+
+			const float t = -dist / denom;
+			if ( denom < 0 ) {
+				value_maximize( enter, t );     /* plane faces the ray: entering */
+			}
+			else{
+				value_minimize( exit, t );      /* plane faces away: exiting */
+			}
+
+			if ( enter >= exit ) {
+				break;
+			}
+		}
+
+		if ( enter >= exit ) {
+			continue;
+		}
+
+		/* brushes are not allowed to overlap, so lengths simply add. mixing liquids of
+		   different absorption is handled by weighting by the length spent in each. */
+		const float length = exit - enter;
+		submerged += length;
+		extinction += wb.extinction * length;
+	}
+
+	if ( submerged <= 0 ) {
+		return;
+	}
+
+	/* extinction is length weighted, so the length cancels back out of the exponent */
+	for ( int i = 0; i < 3; ++i )
+	{
+		if ( extinction[ i ] > 0 ) {
+			trace->color[ i ] *= exp( -extinction[ i ] );
+		}
+	}
+}
+
+
+
+/*
    TraceLine() - ydnar
    rewrote this function a bit :)
  */
 
-void TraceLine( trace_t *trace ){
+static void TraceLine_surfaces( trace_t *trace ){
 	/* setup output (note: this code assumes the input data is completely filled out) */
 	trace->passSolid = false;
 	trace->opaque = false;
@@ -1541,6 +1634,18 @@ void TraceLine( trace_t *trace ){
 			//%	if( TraceWinding( &traceWindings[ node.items[ j ] ], trace ) )
 			//%		return;
 		}
+	}
+}
+
+void TraceLine( trace_t *trace ){
+	TraceLine_surfaces( trace );
+
+	/* an opaque hit already zeroed the colour, so there is nothing left to absorb.
+	   the rest mirrors the early outs above: if occlusion is not being tested at all,
+	   absorbing would be inconsistent. */
+	if ( !waterBrushes.empty() && !trace->opaque
+	  && trace->recvShadows && trace->testOcclusion && trace->distance > 0.00001f ) {
+		TraceLineWaterAbsorption( trace );
 	}
 }
 

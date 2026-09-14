@@ -639,6 +639,8 @@ struct shaderInfo_t_data
 
 	Vector3 fogDir{ 0 };                                /* ydnar */
 
+	Vector3 lightAbsorptionDistance{ 0 };               /* per-channel 1/e distance for light crossing this brush's volume; 0 = no absorption */
+
 	char                *shaderText;                    /* ydnar */
 	bool custom;
 	bool finished;
@@ -1828,6 +1830,7 @@ void                        IlluminateVertexes( int num );
 
 void                        SetupBrushesFlags( int mask_any, int test_any, int mask_all, int test_all );
 void                        SetupBrushes();
+void                        SetupWaterBrushes();
 bool                        ClusterVisible( int a, int b );
 int                         ClusterForPointExt( const Vector3& point, float epsilon );
 void                        SetupEnvelopes( bool forGrid, bool fastFlag );
@@ -2234,6 +2237,28 @@ inline float subdivideThreshold = DEFAULT_SUBDIVIDE_THRESHOLD;
 
 inline int maxOpaqueBrush;
 inline std::vector<std::uint8_t> opaqueBrushes;
+
+/* light-absorbing (liquid) brushes: light crossing these is attenuated by path length */
+struct waterBrush_t
+{
+	MinMax minmax;                  /* conservative bounds, for cheap segment rejection */
+	int firstSide;
+	int numSides;
+	Vector3 extinction;             /* per-channel extinction coefficient, 1/units */
+};
+inline std::vector<waterBrush_t> waterBrushes;
+inline MinMax waterBrushesMinMax;               /* union of all of the above */
+inline Vector3 waterAbsorptionDistance{ 0 };    /* worldspawn fallback for liquid brushes whose shader sets none */
+
+/* water absorbs long wavelengths far faster than short ones, which is what makes deep
+   water go blue-green rather than merely dim. the per channel ranges 7.5 / 22 / 38 come
+   from the reference water shader and match channelRatio in lightall.glsl, so a bake
+   using them shifts hue the same way the runtime volumetric pass does.
+
+   1/e distance is inversely proportional to absorption rate, hence the reciprocal. */
+inline Vector3 LightAbsorptionDistanceFromScale( float redDistance ){
+	return Vector3( redDistance, redDistance * ( 22.0f / 7.5f ), redDistance * ( 38.0f / 7.5f ) );
+}
 
 inline int gridBoundsCulled;
 inline int gridEnvelopeCulled;

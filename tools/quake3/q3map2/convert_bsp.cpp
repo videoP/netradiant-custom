@@ -439,6 +439,18 @@ int ScaleBSPMain( Args& args ){
 			e.setKeyValue( "height", f );
 		}
 
+		/* scale misc_model uniform scale */
+		if ( e.read_keyvalue( f, "modelscale" ) ) {
+			f *= scale[0];
+			e.setKeyValue( "modelscale", f );
+		}
+
+		/* scale misc_model per-axis scale */
+		if ( e.read_keyvalue( vec, "modelscale_vec" ) ) {
+			vec *= scale;
+			e.setKeyValue( "modelscale_vec", vec );
+		}
+
 		// TODO maybe allow a definition file for entities to specify which values are scaled how?
 	}
 

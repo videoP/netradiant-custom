@@ -1271,6 +1271,26 @@ static void ParseShaderFile( const char *filename ){
 					ColorNormalize( si.floodlightRGB );
 				}
 
+				/* q3map_lightAbsorptionDistance <distance> | <r> <g> <b>
+				   distance in world units over which light crossing this brush's volume
+				   falls to 1/e. one value is the usual form: it sets red and derives green
+				   and blue from the reference water ratio. three values override that, for
+				   a liquid that is not water. 0 on a channel disables that channel.
+				   only meaningful on a shader used as brush contents (water/slime/lava). */
+				else if ( striEqual( token, "q3map_lightAbsorptionDistance" ) ) {
+					text.GetToken( false );
+					const float first = atof( token );
+					if ( text.GetToken( false ) ) {
+						si.lightAbsorptionDistance[ 0 ] = first;
+						si.lightAbsorptionDistance[ 1 ] = atof( token );
+						text.GetToken( false );
+						si.lightAbsorptionDistance[ 2 ] = atof( token );
+					}
+					else{
+						si.lightAbsorptionDistance = LightAbsorptionDistanceFromScale( first );
+					}
+				}
+
 				/* jal: q3map_nodirty : skip dirty */
 				else if ( striEqual( token, "q3map_nodirty" ) ) {
 					si.noDirty = true;
