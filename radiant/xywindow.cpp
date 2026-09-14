@@ -1848,7 +1848,10 @@ void XYWnd::XY_Draw(){
 		Scene_Render( renderer, m_view );
 
 		GlobalOpenGL_debugAssertNoErrors();
-		renderer.render( m_modelview, m_projection );
+		{
+			FrameTimerScope timer( g_frametime_flush );
+			renderer.render( m_modelview, m_projection );
+		}
 		GlobalOpenGL_debugAssertNoErrors();
 	}
 
@@ -1905,12 +1908,15 @@ void XYWnd::XY_Draw(){
 		gl().glMatrixMode( GL_MODELVIEW );
 		gl().glLoadIdentity();
 
-		gl().glColor3fv( vector3_to_array( g_xywindow_globals.color_viewname ) );
-
-		gl().glRasterPos3f( 2, 0, 0 );
 		extern const char* Renderer_GetStats( int frame2frame );
-		GlobalOpenGL().drawString( Renderer_GetStats( m_render_time.elapsed_msec() ) );
+		const char* const stats = Renderer_GetStats( m_render_time.elapsed_msec() );
 		m_render_time.start();
+
+		FrameStats_drawStringOutline( 2.f, 0.f, stats );
+
+		gl().glColor3fv( vector3_to_array( g_xywindow_globals.color_viewname ) );
+		gl().glRasterPos3f( 2, 0, 0 );
+		GlobalOpenGL().drawString( stats );
 	}
 }
 

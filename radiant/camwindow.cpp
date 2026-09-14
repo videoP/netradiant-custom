@@ -2067,7 +2067,10 @@ void CamWnd::Cam_Draw(){
 			m_draw_size.render( renderer, m_state_text, m_view );
 		}
 
-		renderer.render( m_Camera.modelview, m_Camera.projection );
+		{
+			FrameTimerScope timer( g_frametime_flush );
+			renderer.render( m_Camera.modelview, m_Camera.projection );
+		}
 	}
 
 	// prepare for 2d stuff
@@ -2119,18 +2122,27 @@ void CamWnd::Cam_Draw(){
 	if ( g_camwindow_globals.m_showStats ) {
 		const float lineHeight = GlobalOpenGL().m_font->getPixelHeight();
 
+		/* Text straight onto a textured scene is hard to read; each line gets a
+		   black outline under it rather than a band across the view. */
 		updateFrameRate( m_render_time.elapsed_sec() );
-		gl().glRasterPos3f( 1, m_Camera.height, 0 );
-		GlobalOpenGL().drawString( m_fps_text );
 
-		gl().glRasterPos3f( 1, m_Camera.height - lineHeight, 0 );
 		extern const char* Renderer_GetStats( int frame2frame );
-		GlobalOpenGL().drawString( Renderer_GetStats( m_render_time.elapsed_msec() ) );
+		extern const char* Cull_GetStats();
+		const char* const lines[] = {
+			m_fps_text,
+			Renderer_GetStats( m_render_time.elapsed_msec() ),
+			Cull_GetStats(),
+		};
 		m_render_time.start();
 
-		gl().glRasterPos3f( 1, m_Camera.height - lineHeight * 2, 0 );
-		extern const char* Cull_GetStats();
-		GlobalOpenGL().drawString( Cull_GetStats() );
+		for ( std::size_t i = 0; i < std::size( lines ); ++i )
+		{
+			const float y = static_cast<float>( m_Camera.height ) - lineHeight * i;
+			FrameStats_drawStringOutline( 1.0f, y, lines[i] );
+			gl().glColor3f( 1, 1, 1 );
+			gl().glRasterPos3f( 1.0f, y, 0.0f );
+			GlobalOpenGL().drawString( lines[i] );
+		}
 	}
 
 	// bind back to the default texture so that we don't have problems

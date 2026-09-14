@@ -44,6 +44,7 @@
 #include "container/hashfunc.h"
 #include "container/cache.h"
 #include "largemap.h"
+#include "framestats.h"
 #include "generic/reference.h"
 #include "moduleobservers.h"
 #include "stream/filestream.h"
@@ -105,6 +106,17 @@ std::size_t g_count_instances;
 std::size_t g_count_cells_batched;
 bool g_index_used;
 
+/* See framestats.h. Written by renderer.h and staticbatch.cpp. */
+double g_frametime_batch;
+double g_frametime_walk;
+double g_frametime_flush;
+std::size_t g_count_chunks_visited;
+std::size_t g_count_chunks_drawn;
+std::size_t g_count_ranges;
+std::size_t g_count_childbounds_full;
+std::size_t g_count_childbounds_walked;
+double g_frametime_childbounds;
+
 inline void count_prim(){
 	++g_count_prims;
 }
@@ -123,7 +135,39 @@ void Renderer_ResetStats(){
 	g_count_transforms = 0;
 	g_count_instances = 0;
 	g_count_cells_batched = 0;
+	g_frametime_batch = 0;
+	g_frametime_walk = 0;
+	g_frametime_flush = 0;
+	g_count_chunks_visited = 0;
+	g_count_chunks_drawn = 0;
+	g_count_ranges = 0;
+	g_count_childbounds_full = 0;
+	g_count_childbounds_walked = 0;
+	g_frametime_childbounds = 0;
 	g_timer.start();
+}
+
+/// rief Milliseconds, as an int, so the overlay stays one line.
+inline int msec_of( double seconds ){
+	return static_cast<int>( seconds * 1000.0 + 0.5 );
+}
+
+void FrameStats_drawStringOutline( float x, float y, const char* text ){
+	/* Eight offsets rather than a filled band: the stats stay readable over
+	   anything without blacking out the view behind them, and it needs no way
+	   to measure the text, which GLFont does not offer. The caller draws the
+	   text itself afterwards, in its own colour. */
+	static const float c_offsets[8][2] = {
+		{ -1, -1 }, { 0, -1 }, { 1, -1 },
+		{ -1,  0 },            { 1,  0 },
+		{ -1,  1 }, { 0,  1 }, { 1,  1 },
+	};
+	gl().glColor3f( 0, 0, 0 );
+	for ( const auto& offset : c_offsets )
+	{
+		gl().glRasterPos3f( x + offset[0], y + offset[1], 0.0f );
+		GlobalOpenGL().drawString( text );
+	}
 }
 
 const char* Renderer_GetStats( int frame2frame ){
@@ -134,6 +178,13 @@ const char* Renderer_GetStats( int frame2frame ){
 		" | walked: ", g_count_instances,
 		" | batched: ", g_count_cells_batched,
 		" | idx: ", g_index_used ? "grid" : "full",
+		" | chunks: ", g_count_chunks_drawn, "/", g_count_chunks_visited,
+		" | calls: ", g_count_ranges,
+		" | cb: ", g_count_childbounds_full, "x", g_count_childbounds_walked,
+		"=", msec_of( g_frametime_childbounds ), "ms",
+		" | ms batch/walk/flush: ", msec_of( g_frametime_batch ),
+		"/", msec_of( g_frametime_walk ),
+		"/", msec_of( g_frametime_flush ),
 		" | msec: ", g_timer.elapsed_msec(),
 		" | f2f: ", frame2frame
 	);

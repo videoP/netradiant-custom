@@ -28,6 +28,7 @@
 #include "scenelib.h"
 #include "scenegraph.h"
 #include "staticbatch.h"
+#include "framestats.h"
 #include "math/frustum.h"
 #include <vector>
 
@@ -168,8 +169,14 @@ public:
 };
 
 inline void Scene_Render( Renderer& renderer, const VolumeTest& volume ){
-	StaticBatch_begin( renderer, volume );
-	Scene_traverseVisible( GlobalSceneGraph(), volume, ForEachVisible<RenderHighlighted>( volume, RenderHighlighted( renderer, volume ) ) );
+	{
+		FrameTimerScope timer( g_frametime_batch );
+		StaticBatch_begin( renderer, volume );
+	}
+	{
+		FrameTimerScope timer( g_frametime_walk );
+		Scene_traverseVisible( GlobalSceneGraph(), volume, ForEachVisible<RenderHighlighted>( volume, RenderHighlighted( renderer, volume ) ) );
+	}
 	StaticBatch_end();
 	GlobalShaderCache().forEachRenderable( RenderHighlighted::RenderCaller( RenderHighlighted( renderer, volume ) ) );
 }

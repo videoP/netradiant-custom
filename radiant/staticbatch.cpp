@@ -9,6 +9,7 @@
 #include "largemap.h"
 #include "chunkgrid.h"
 #include "scopetimer.h"
+#include "framestats.h"
 
 #include "ientity.h"
 #include "ieclass.h"
@@ -570,7 +571,9 @@ bool Chunk::renderWire( Renderer& renderer, const VolumeTest& volume, int direct
 		buildWire( direction, volume );
 		budget -= timer.elapsed_sec();
 	}
+	++g_count_chunks_drawn;
 	if ( m_wire[ direction ].m_count != 0 ) {
+		++g_count_ranges;
 		renderer.SetState( shader, Renderer::eWireframeOnly );
 		renderer.addRenderable( m_wire[ direction ], g_matrix4_identity );
 	}
@@ -584,8 +587,10 @@ void Chunk::render( Renderer& renderer, const VolumeTest& volume ) const {
 	if ( m_dirty || m_ranges.empty() || volume.TestAABB( m_bounds ) == c_volumeOutside ) {
 		return;
 	}
+	++g_count_chunks_drawn;
 	for ( const auto& range : m_ranges )
 	{
+		++g_count_ranges;
 		renderer.SetState( range->m_shader, Renderer::eFullMaterials );
 		renderer.addRenderable( *range, g_matrix4_identity );
 	}
@@ -680,6 +685,7 @@ bool StaticBatch_begin( Renderer& renderer, const VolumeTest& volume ){
 	renderer.PushState();
 	for ( auto& [ key, chunk ] : g_cache.m_chunks )
 	{
+		++g_count_chunks_visited;
 		if ( chunk.m_dirty ) {
 			if ( rebuilt >= c_rebuildBudget ) {
 				continue;

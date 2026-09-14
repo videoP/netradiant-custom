@@ -39,6 +39,7 @@
 
 #include "cullable.h"
 #include "chunkgrid.h"
+#include "framestats.h"
 #include "math/frustum.h"
 #include "math/aabb.h"
 
@@ -585,8 +586,16 @@ public:
 			}
 		}
 
+		/* The expensive path: walks every child. Counted and timed because a
+		   frame that walks almost nothing can still spend all its time here -
+		   see framestats.h. */
 		bounds = AABB();
-		traverse_subgraph( AABBAccumulateWalker( bounds, count ), instance.path() );
+		{
+			FrameTimerScope timer( g_frametime_childbounds );
+			traverse_subgraph( AABBAccumulateWalker( bounds, count ), instance.path() );
+		}
+		++g_count_childbounds_full;
+		g_count_childbounds_walked += count;
 
 		// only containers big enough to hurt are worth an entry
 		if ( g_largemap_incrementalBounds.m_value && count >= c_minChildrenForBoundsCache ) {
