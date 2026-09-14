@@ -10,7 +10,7 @@
 
 #include <cstddef>
 
-/// rief Mirror of g_largemap_lazyComponents; see the comment in brush.h.
+/// \brief Mirror of g_largemap_lazyComponents; see the comment in brush.h.
 extern bool g_brush_lazyComponents;
 
 /// \brief Bytes the face pool has taken from the system, block rounding and all.

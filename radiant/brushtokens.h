@@ -463,7 +463,7 @@ public:
 };
 
 
-/*! rief Where the time inside reading a brush goes.
+/*! \brief Where the time inside reading a brush goes.
 
     Reading brushes and building their faces is ~96% of a map parse, and it is
     two jobs: constructing each Face, and tokenising the text to fill it in.

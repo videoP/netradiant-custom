@@ -54,7 +54,7 @@
 #include "brushalloc.h"
 #include "brushmemory.h"
 
-/*! rief Mirror of g_largemap_lazyComponents, set by LargeMap_Construct.
+/*! \brief Mirror of g_largemap_lazyComponents, set by LargeMap_Construct.
 
     brush.h is included by the contrib plugins, which do not link radiant's
     preference code, so the LatchedBool itself cannot be named here. Same
@@ -1802,7 +1802,7 @@ public:
 		                   + ( m_select_edges.capacity() != 0 );
 	}
 
-	/// rief The unique edges and vertices, for building component instances from.
+	/// \brief The unique edges and vertices, for building component instances from.
 	SelectableEdges& selectableEdges(){
 		return m_select_edges;
 	}
@@ -3450,7 +3450,7 @@ class BrushInstance :
 	EdgeInstances m_edgeInstancesStore;
 	typedef std::vector<VertexInstance> VertexInstances;
 	VertexInstances m_vertexInstancesStore;
-	/// rief Whether the two above are up to date. See buildComponentInstances().
+	/// \brief Whether the two above are up to date. See buildComponentInstances().
 	mutable bool m_componentsBuilt = false;
 
 	ObservedSelectable m_selectable;
@@ -3618,7 +3618,7 @@ public:
 		}
 	}
 
-	/*! rief Builds the edge and vertex instances if they are not there yet.
+	/*! \brief Builds the edge and vertex instances if they are not there yet.
 
 	    With Vertex editing data on demand switched on, the b-rep build no
 	    longer pushes these - they cost ~600 B and five allocations a brush, and

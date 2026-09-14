@@ -148,7 +148,7 @@ void Renderer_ResetStats(){
 	g_timer.start();
 }
 
-/// rief Milliseconds, as an int, so the overlay stays one line.
+/// \brief Milliseconds, as an int, so the overlay stays one line.
 inline int msec_of( double seconds ){
 	return static_cast<int>( seconds * 1000.0 + 0.5 );
 }

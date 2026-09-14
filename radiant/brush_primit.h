@@ -107,7 +107,7 @@ void Texdef_Construct_local2tex( const TextureProjection& projection, std::size_
 void Texdef_Construct_local2tex4projection( const texdef_t& texdef, std::size_t width, std::size_t height, const Vector3& normal, const Vector3* direction, Matrix4& local2tex );
 void Texdef_Construct_local2tex_from_ST( const PlanePoints& points, const DoubleVector3 st[3], Matrix4& local2tex );
 void BP_Construct_local2tex( const brushprimit_texdef_t& bp, const Plane3& plane, Matrix4& local2tex );
-/// rief Fills in \p w's texture coordinates, and hands back the face's
+/// \brief Fills in \p w's texture coordinates, and hands back the face's
 /// tangent basis - one pair for the whole face, not one per vertex.
 void Texdef_EmitTextureCoordinates( const TextureProjection& projection, std::size_t width, std::size_t height, Winding& w, const Vector3& normal, const Matrix4& localToWorld, Vector3& tangent, Vector3& bitangent );
 

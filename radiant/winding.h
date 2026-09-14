@@ -82,7 +82,7 @@ enum PlaneClassification
 const std::size_t c_brush_maxFaces = 1024;
 
 
-/*! rief 40 bytes.
+/*! \brief 40 bytes.
 
     tangent and bitangent used to live here, but Texdef_EmitTextureCoordinates
     computes them once per face and wrote the same pair into every vertex of it.

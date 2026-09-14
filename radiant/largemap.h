@@ -77,7 +77,7 @@ extern LatchedBool g_largemap_poolFaces;
  */
 extern LatchedBool g_largemap_fastParse;
 
-/*! rief Build each brush's vertex/edge editing data only when something asks
+/*! \brief Build each brush's vertex/edge editing data only when something asks
     for it, rather than for every brush in the map at load.
 
     Measured on a 1 GB map: the edge and vertex instances come to ~600 B a brush
