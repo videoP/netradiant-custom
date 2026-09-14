@@ -114,7 +114,11 @@ bool MapResource_saveFile( const MapFormat& format, scene::Node& root, GraphTrav
 		globalOutputStream() << "success\n";
 		ScopeDisableScreenUpdates disableScreenUpdates( path_get_filename_start( filename ), "Saving Map" );
 		format.writeGraph( root, traverse, file );
-		return true;
+		if ( file.close() ) {
+			return true;
+		}
+		globalErrorStream() << "failure while writing map file: " << Quoted( filename ) << '\n';
+		return false;
 	}
 
 	globalErrorStream() << "failure\n";

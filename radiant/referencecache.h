@@ -23,6 +23,8 @@
 
 /// \brief Saves all open resource references if they differ from the version on disk.
 void SaveReferences();
+/// \brief True if every open map resource matches the version on disk.
+bool References_Saved();
 /// \brief Flushes the cache of resource references. All resource references must be released before calling this.
 void FlushReferences();
 /// \brief Reloads all resource references that differ from the version on disk.

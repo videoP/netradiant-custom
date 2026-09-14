@@ -1268,7 +1268,7 @@ bool Map_Save(){
 	globalOutputStream() << "  save io: " << g_writeStats.writeCalls << " writes, "
 	                     << g_writeStats.fwrites << " fwrites, "
 	                     << ( g_writeStats.bytes >> 20 ) << " MB\n";
-	return true; // assume success..
+	return References_Saved();
 }
 
 /*

@@ -62,6 +62,7 @@ public:
 class TextFileOutputStream : public TextOutputStream
 {
 	FILE* m_file;
+	bool m_failed;
 	static const std::size_t c_bufferSize = 64 * 1024;
 	char m_buffer[c_bufferSize];
 	std::size_t m_pos = 0;
@@ -76,31 +77,59 @@ class TextFileOutputStream : public TextOutputStream
 		WriteTimerScope ioTime( g_writeStats.ioSeconds );
 		++g_writeStats.fwrites;
 		g_writeStats.bytes += length;
-		return fwrite( buffer, 1, length, m_file );
+		const std::size_t written = fwrite( buffer, 1, length, m_file );
+		if ( written != length ) {
+			m_failed = true;
+		}
+		return written;
 	}
 public:
-	TextFileOutputStream( const char* name ){
-		m_file = name[0] == '\0' ? 0 : fopen( name, "wt" );
+	TextFileOutputStream( const char* name )
+		: m_file( name[0] == '\0' ? 0 : fopen( name, "wt" ) ),
+		  m_failed( m_file == 0 ){
 	}
 	~TextFileOutputStream(){
-		if ( !failed() ) {
+		close();
+	}
+
+	/*! \brief Flushes and closes the stream, reporting failures which can occur
+	    long after open() succeeded (most importantly, a full disk).
+
+	    fclose() is part of the result because stdio may still hold translated
+	    text-mode bytes after our own 64 KB buffer has been flushed. */
+	bool close(){
+		if ( m_file != 0 ) {
 			flush();
-			fclose( m_file );
+			FILE* file = m_file;
+			m_file = 0;
+			if ( fclose( file ) != 0 ) {
+				m_failed = true;
+			}
 		}
+		return !m_failed;
 	}
 
 	bool failed() const {
-		return m_file == 0;
+		return m_failed;
 	}
 
 	std::size_t write( const char* buffer, std::size_t length ) override {
 		++g_writeStats.writeCalls;
+		if ( m_failed || m_file == 0 ) {
+			return 0;
+		}
 		if ( length >= c_bufferSize ) { // too big to be worth gathering
 			flush();
+			if ( m_failed ) {
+				return 0;
+			}
 			return write_counted( buffer, length );
 		}
 		if ( m_pos + length > c_bufferSize ) {
 			flush();
+			if ( m_failed ) {
+				return 0;
+			}
 		}
 		std::memcpy( m_buffer + m_pos, buffer, length );
 		m_pos += length;
