@@ -573,6 +573,7 @@ $(INSTALLDIR)/q3map2.$(EXE): \
 	tools/quake3/q3map2/convert_obj.o \
 	tools/quake3/q3map2/decals.o \
 	tools/quake3/q3map2/exportents.o \
+	tools/quake3/q3map2/riverbed.o \
 	tools/quake3/q3map2/facebsp.o \
 	tools/quake3/q3map2/fog.o \
 	tools/quake3/q3map2/games.o \

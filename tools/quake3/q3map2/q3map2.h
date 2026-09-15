@@ -1851,6 +1851,10 @@ void                        StoreSurfaceLightmaps( bool fastAllocate, bool store
 int                         ExportEntitiesMain( Args& args );
 
 
+/* riverbed.cpp */
+int                         RiverbedMain( Args& args );
+
+
 /* image.c */
 const image_t               *ImageLoad( const char *name );
 

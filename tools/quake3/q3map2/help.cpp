@@ -355,6 +355,15 @@ static void HelpExportEnts()
 	HelpOptions( "ExportEnts Stage", 0, 80, options );
 }
 
+static void HelpRiverbed()
+{
+	const std::vector<HelpOption> options = {
+		{ "-riverbed <filename.bsp>", "Precomputes river bed data for misc_sailing_river entities (.riverbed)" },
+		{ "-cellsize <F>", "Override the entity's cellSize; one file is written per size" },
+	};
+	HelpOptions( "Riverbed Stage", 0, 80, options );
+}
+
 static void HelpFixaas()
 {
 	const std::vector<HelpOption> options = {
@@ -504,6 +513,7 @@ void HelpMain( const char* arg )
 		{ "-repack", "Maps repack creation" },
 		{ "-json", "BSP json export/import" },
 		{ "-mergebsp", "BSP merge" },
+		{ "-riverbed", "River bed precompute" },
 	};
 	void( *help_funcs[] )() = {
 		HelpBsp,
@@ -523,6 +533,7 @@ void HelpMain( const char* arg )
 		HelpRepack,
 		HelpJson,
 		HelpMergeBsp,
+		HelpRiverbed,
 	};
 
 	if ( !strEmptyOrNull( arg ) )

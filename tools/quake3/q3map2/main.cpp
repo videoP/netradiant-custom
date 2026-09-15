@@ -199,6 +199,11 @@ int main( int argc, char **argv ){
 		r = ExportEntitiesMain( args );
 	}
 
+	/* river bed precompute */
+	else if ( args.takeFront( "-riverbed" ) ) {
+		r = RiverbedMain( args );
+	}
+
 	/* ydnar: lightmap export */
 	else if ( args.takeFront( "-export" ) ) {
 		r = ExportLightmapsMain( args );
