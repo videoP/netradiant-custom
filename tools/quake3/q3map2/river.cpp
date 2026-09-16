@@ -114,12 +114,12 @@ static void RiverWrite( const char *bspPath, const RiverSolveOutput& solved ){
 	}
 
 	/*
-	 * Named the way the engine derives it, not the way the .riverbed is named.
-	 * BG_SailingRiverBakePath has no cell size in it - only the .riverbed path
-	 * does - so writing <map>_<river>_c32.river produces a file the engine
-	 * never looks for, and it silently falls back to solving live.  An authored
-	 * 'bake' key wins, as it does there, which is also how a mapper keeps
-	 * several resolutions apart.
+	 * Named the way the engine derives it, cell size included, so several
+	 * resolutions can sit side by side the way the .riverbed's already do.
+	 * Without the size the engine finds a bake taken at some other cell size,
+	 * loads it, and throws it out on a header mismatch - which reads like
+	 * something is broken rather than like a file that was never made.  An
+	 * authored 'bake' key still wins, as it does in the engine.
 	 */
 	StringOutputStream filename;
 	if ( !s_job.bakeFile.empty() ) {
@@ -131,7 +131,8 @@ static void RiverWrite( const char *bspPath, const RiverSolveOutput& solved ){
 		}
 	}
 	else{
-		filename( PathExtensionless( bspPath ), "_", s_job.name.c_str(), ".river" );
+		filename( PathExtensionless( bspPath ), "_", s_job.name.c_str(),
+		          "_c", int( s_job.cellSize + 0.5f ), ".river" );
 	}
 	Sys_Printf( "Writing %s\n", filename.c_str() );
 
