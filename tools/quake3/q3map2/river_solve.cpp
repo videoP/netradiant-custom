@@ -172,6 +172,18 @@ bool RiverSolve( const RiverSolveInput& in, RiverBrushTestFn brushTest,
 	   lake the boundaries never supplied */
 	BG_SailingRiverFieldInitializeWater( &field, &river, qfalse );
 
+	out.sourceCells = 0;
+	out.sinkCells = 0;
+	for ( i = 0; i < in.cellCount; ++i )
+	{
+		if ( sourceOwner[ i ] >= 0 ) {
+			++out.sourceCells;
+		}
+		if ( sinkOwner[ i ] >= 0 ) {
+			++out.sinkCells;
+		}
+	}
+
 	/* --- solve --- */
 	const float gravity = SAILING_GRAVITY;
 	const float cfl = 0.20f;
@@ -210,8 +222,37 @@ bool RiverSolve( const RiverSolveInput& in, RiverBrushTestFn brushTest,
 		}
 
 		if ( in.reportEvery > 0 && ( steps % in.reportEvery ) == 0 ) {
-			RiverPrint( "%9d steps  %8.1fs simulated  volume %.3e  rate %+.3e",
-			            steps, field.simulationTime, field.volume, field.volumeRate );
+			/*
+			 * The front, not the volume.  Volume is a number nobody can size by
+			 * eye, and the rate only becomes meaningful once the water has
+			 * actually reached the outlet - until then it simply equals the
+			 * inflow and looks alarmingly constant.  How far down the channel
+			 * the water has come answers "is this working" directly.
+			 */
+			int wet = 0;
+			int front = 0;
+			for ( int c = 0; c < in.cellCount; ++c )
+			{
+				if ( cells[ c ].depth <= 0.0f ) {
+					continue;
+				}
+				++wet;
+				if ( in.reach != NULL && in.reach[ c ] > front ) {
+					front = in.reach[ c ];
+				}
+			}
+
+			if ( in.reach != NULL && in.reachMax > 0 ) {
+				RiverPrint( "%9d steps  %7.1fs  front %3d%%  wet %3d%%  rate %+.2e",
+				            steps, field.simulationTime,
+				            ( front * 100 ) / in.reachMax,
+				            ( wet * 100 ) / in.cellCount, field.volumeRate );
+			}
+			else{
+				RiverPrint( "%9d steps  %7.1fs  wet %3d%%  rate %+.2e",
+				            steps, field.simulationTime,
+				            ( wet * 100 ) / in.cellCount, field.volumeRate );
+			}
 		}
 	}
 

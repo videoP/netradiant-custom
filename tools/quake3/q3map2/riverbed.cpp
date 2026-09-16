@@ -520,6 +520,10 @@ static int RiverbedCapture(){
 	std::vector<riverbedSpan_t> spans;
 	std::vector<int> frontier;
 	int captured = 0;
+	int level = 0;
+
+	s_job.reach.assign( s_job.cells.size(), 0 );
+	s_job.reachMax = 0;
 
 	for ( riverbedCell_t& cell : s_job.cells )
 	{
@@ -588,6 +592,7 @@ static int RiverbedCapture(){
 
 	while ( !frontier.empty() )
 	{
+		++level;
 		s_candidates.clear();
 
 		for ( int gridIndex : frontier )
@@ -641,6 +646,8 @@ static int RiverbedCapture(){
 			s_job.cells[ compact ].bedHeight = candidate.floorZ;
 			s_job.cells[ compact ].ceilingHeight = candidate.ceilingZ;
 			s_job.cells[ compact ].flags |= RIVERBED_CELL_ACTIVE;
+			s_job.reach[ compact ] = level;
+			s_job.reachMax = level;
 			frontier.push_back( candidate.gridIndex );
 			++captured;
 		}
@@ -878,6 +885,7 @@ bool RiverbedPrepare( const entity_t& river, float cellSizeOverride ){
 	}
 	s_job.captureHeadroom = std::min( 256.0f, s_job.captureHeadroom );
 
+	s_job.bakeFile = river.valueForKey( "bake" );
 	s_job.friction = 0.12f;         /* the engine's default for the key */
 	river.read_keyvalue( s_job.friction, "friction" );
 	s_job.friction = std::min( 2.0f, std::max( 0.001f, s_job.friction ) );

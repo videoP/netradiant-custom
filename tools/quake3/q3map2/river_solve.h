@@ -56,6 +56,12 @@ struct RiverSolveInput
 	const RiverSolveSink *sinks;
 	int numSinks;
 
+	/* Along-channel distance of each cell in cells, from the capture walk, so
+	   progress can be reported as how far the front has come rather than as a
+	   volume nobody can size by eye.  Optional; NULL to omit it. */
+	const int *reach;
+	int reachMax;
+
 	float dischargeOverride;        /* < 0 for none */
 	int maxSteps;                   /* 0 for unlimited */
 	int reportEvery;                /* steps between progress lines, 0 to hush */
@@ -74,6 +80,11 @@ struct RiverSolveOutput
 	float volumeRate;
 	int clampedCells;
 	int resetCells;
+	/* How many cells each boundary actually claimed.  An outlet that claimed
+	   none cannot remove anything, which looks exactly like a reach that will
+	   not settle - so it is worth knowing before blaming the hydraulics. */
+	int sourceCells;
+	int sinkCells;
 	bool converged;
 };
 

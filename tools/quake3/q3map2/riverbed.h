@@ -68,6 +68,13 @@ struct riverbedJob_t
 	std::vector<int> cellIndex;     /* grid -> compact, or -1 outside the corridor */
 	std::vector<riverbedCell_t> cells;
 
+	/* How far along the channel each cell is, in cells, as the capture walk
+	   reached it.  The walk is a breadth first flood from the inlet, so its
+	   level is the distance the water has to travel to get there - which on a
+	   gorge that doubles back is nothing like the straight line distance. */
+	std::vector<int> reach;
+	int reachMax;
+
 	/* Inlets and outlets in entity order, which the solver's settings hash
 	   depends on: it walks the tables in registration order, so a different
 	   order is a different hash and the engine rejects the bake. */
@@ -75,6 +82,7 @@ struct riverbedJob_t
 	std::vector<riverbedSinkEnt_t> sinks;
 
 	float friction;
+	std::string bakeFile;           /* the entity's 'bake' key, if any */
 };
 
 extern riverbedJob_t s_job;

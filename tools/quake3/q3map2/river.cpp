@@ -113,8 +113,26 @@ static void RiverWrite( const char *bspPath, const RiverSolveOutput& solved ){
 		water[ i * 3 + 2 ] = solved.momentum[ i * 2 + 1 ];
 	}
 
-	const auto filename = StringStream( PathExtensionless( bspPath ), "_", s_job.name.c_str(),
-	                                    "_c", int( s_job.cellSize + 0.5f ), ".river" );
+	/*
+	 * Named the way the engine derives it, not the way the .riverbed is named.
+	 * BG_SailingRiverBakePath has no cell size in it - only the .riverbed path
+	 * does - so writing <map>_<river>_c32.river produces a file the engine
+	 * never looks for, and it silently falls back to solving live.  An authored
+	 * 'bake' key wins, as it does there, which is also how a mapper keeps
+	 * several resolutions apart.
+	 */
+	StringOutputStream filename;
+	if ( !s_job.bakeFile.empty() ) {
+		if ( s_job.bakeFile.find_first_of( "/\\" ) != std::string::npos ) {
+			filename( PathExtensionless( s_job.bakeFile.c_str() ), ".river" );
+		}
+		else{
+			filename( PathFilenameless( bspPath ), PathExtensionless( s_job.bakeFile.c_str() ), ".river" );
+		}
+	}
+	else{
+		filename( PathExtensionless( bspPath ), "_", s_job.name.c_str(), ".river" );
+	}
 	Sys_Printf( "Writing %s\n", filename.c_str() );
 
 	FILE *file = SafeOpenWrite( filename, "wb" );
@@ -210,6 +228,8 @@ static void RiverSolveOne( const entity_t& river, float cellSizeOverride,
 	in.numSources = int( sources.size() );
 	in.sinks = sinks.data();
 	in.numSinks = int( sinks.size() );
+	in.reach = s_job.reach.empty() ? NULL : s_job.reach.data();
+	in.reachMax = s_job.reachMax;
 	in.dischargeOverride = -1.0f;
 	in.maxSteps = maxSteps;
 	in.reportEvery = 5000;
@@ -230,6 +250,12 @@ static void RiverSolveOne( const entity_t& river, float cellSizeOverride,
 		return;
 	}
 
+	Sys_Printf( "%9d inlet cells, %d outlet cells\n", out.sourceCells, out.sinkCells );
+	if ( out.sinkCells == 0 && !s_job.sinks.empty() ) {
+		Sys_Warning( "the outlet brushes claimed no cell, so nothing can leave the reach "
+		             "and it can never settle - check that a sink brush actually overlaps "
+		             "the captured channel\n" );
+	}
 	Sys_Printf( "%9d steps, %.1f seconds simulated\n", out.stepCount, out.simulationTime );
 	Sys_Printf( "%9d wet cells of %d\n", out.wetCells, int( s_job.cells.size() ) );
 	Sys_Printf( "%9.3e volume, rate %+.3e\n", out.volume, out.volumeRate );
