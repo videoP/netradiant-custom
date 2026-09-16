@@ -95,3 +95,9 @@ typedef bool ( *RiverBrushTestFn )( int kind, int index,
 
 bool RiverSolve( const RiverSolveInput& in, RiverBrushTestFn brushTest,
                  RiverSolveOutput& out );
+
+/* A persistent pool for the face pass.  Start it once before solving: the step
+   count is in the hundreds of thousands, so anything that creates threads per
+   dispatch costs far more than the work it parallelises. */
+void RiverSolveStartThreads( int threads );
+void RiverSolveStopThreads();

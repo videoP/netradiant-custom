@@ -254,6 +254,19 @@ enum {
 typedef qboolean ( *sailingRiverBrushTest_t )( int kind, int index,
                                                const vec3_t mins, const vec3_t maxs );
 
+/* One work item of the face pass, and the optional dispatcher for it. Gather
+   makes every item independent, so the pass can be split across threads without
+   changing the answer; the engine leaves the hook NULL, the compiler sets it. */
+typedef struct sailingRiverFaceJob_s {
+	sailingRiverField_t *field;
+	float gravity;
+	float scale;
+} sailingRiverFaceJob_t;
+
+typedef void ( *sailingRiverParallelFor_t )( const sailingRiverFaceJob_t *job,
+                                             int count );
+extern sailingRiverParallelFor_t bgSailingRiverParallelFor;
+
 /* ---- the entity tables the boundary code reads ---- */
 
 extern sailingRiverSource_t bgSailingRiverSources[ MAX_SAILING_RIVER_SOURCES ];

@@ -29,8 +29,8 @@ static void BG_SailingRiverApplyComputedStageSink( sailingRiverField_t *field, c
 void BG_SailingRiverFieldApplyBoundariesOverride( sailingRiverField_t *field, const sailingRiver_t *river, float timeStep, float dischargeOverride, float friction );
 void BG_SailingRiverFieldApplyBoundaries( sailingRiverField_t *field, const sailingRiver_t *river, float timeStep, float friction );
 static void BG_SailingRiverHydrostaticFlux( const sailingRiverCell_t *left, const sailingRiverCell_t *right, int axis, float gravity, float leftFluxResult[3], float rightFluxResult[3] );
-static void BG_SailingRiverStepFaceX( sailingRiverField_t *field, int leftIndex, int rightIndex, float gravity, float scale, float *leftFlux, float *rightFlux );
-static void BG_SailingRiverStepFaceY( sailingRiverField_t *field, int lowerIndex, int upperIndex, float gravity, float scale, float *lowerFlux, float *upperFlux );
+static void BG_SailingRiverGatherFace( sailingRiverField_t *field, int index, int neighbor, int axis, qboolean forward, float gravity, float scale );
+void BG_SailingRiverStepFaceWork( const sailingRiverFaceJob_t *job, int workIndex );
 void BG_SailingRiverFieldInvalidateActive( sailingRiverField_t *field );
 static void BG_SailingRiverFieldRefreshActive( sailingRiverField_t *field );
 static void BG_SailingRiverWorkAdd( sailingRiverField_t *field, int index );
@@ -1096,103 +1096,82 @@ static void BG_SailingRiverHydrostaticFlux( const sailingRiverCell_t *left,
 }
 
 /*
- * One X face, between leftIndex and leftIndex + 1. Lifted verbatim out of the
- * old rectangle sweep so the three cases - both sides active, and each
- * one-sided case reflecting off the dry neighbour as a wall - stay exactly as
- * they were.
+ * One face of one cell, applied to that cell only.
+ *
+ * The scatter form this replaces computed a face once and wrote both cells
+ * either side of it, which is cheaper - each flux is used twice - but means two
+ * cells being solved at the same time can write the same memory. Gathering
+ * costs the flux twice, once from each side, and buys back that every cell
+ * reads only its neighbours PREVIOUS state and writes only itself. That makes
+ * the pass trivially parallel, and bit-identical whatever the thread count,
+ * which matters because the client and the server have to agree.
+ *
+ * forward means the neighbour lies on the +axis side, so this cell is the
+ * "left" of the face and loses what crosses it; otherwise this cell is the
+ * "right" and gains it. A missing or inactive neighbour is a wall: the cell is
+ * mirrored across the face with its normal momentum reversed, exactly as the
+ * scatter form did.
  */
-static void BG_SailingRiverStepFaceX( sailingRiverField_t *field,
-	int leftIndex, int rightIndex, float gravity, float scale,
-	float *leftFlux, float *rightFlux ) {
-	/*
-	 * Either side may be -1, meaning the zone does not allocate a cell there.
-	 * That is treated exactly like an inactive neighbour - a wall - which is
-	 * what the separate rectangle-edge passes used to do for the outside of
-	 * the grid. Handling both here keeps one definition of a domain wall and
-	 * stops the edge of the grid being a special case.
-	 */
-	const sailingRiverCell_t *left = leftIndex >= 0
-		? &field->cells[leftIndex] : NULL;
-	const sailingRiverCell_t *right = rightIndex >= 0
-		? &field->cells[rightIndex] : NULL;
+static void BG_SailingRiverGatherFace( sailingRiverField_t *field, int index,
+	int neighbor, int axis, qboolean forward, float gravity, float scale ) {
+	const sailingRiverCell_t *self = &field->cells[index];
+	const sailingRiverCell_t *other = neighbor >= 0
+		? &field->cells[neighbor] : NULL;
+	const sailingRiverCell_t *left;
+	const sailingRiverCell_t *right;
+	sailingRiverCell_t wall;
+	float leftFlux[3];
+	float rightFlux[3];
 
-	if ( (!left || left->depth <= 0.0f) && (!right || right->depth <= 0.0f) ) return;
-
-	if ( left && right && ( left->flags & SAILING_RIVER_CELL_ACTIVE )
-		&& ( right->flags & SAILING_RIVER_CELL_ACTIVE ) ) {
-		BG_SailingRiverHydrostaticFlux( left, right, 0, gravity,
-			leftFlux, rightFlux );
-		field->scratch[leftIndex].depth -= scale * leftFlux[0];
-		field->scratch[rightIndex].depth += scale * rightFlux[0];
-		field->scratch[leftIndex].momentum[0] -= scale * leftFlux[1];
-		field->scratch[rightIndex].momentum[0] += scale * rightFlux[1];
-		field->scratch[leftIndex].momentum[1] -= scale * leftFlux[2];
-		field->scratch[rightIndex].momentum[1] += scale * rightFlux[2];
+	if ( self->depth <= 0.0f && ( !other || other->depth <= 0.0f ) ) {
+		return;
 	}
-	else if ( left && ( left->flags & SAILING_RIVER_CELL_ACTIVE ) ) {
-		sailingRiverCell_t wall = *left;
-
-		wall.momentum[0] = -wall.momentum[0];
-		BG_SailingRiverHydrostaticFlux( left, &wall, 0, gravity,
-			leftFlux, rightFlux );
-		field->scratch[leftIndex].depth -= scale * leftFlux[0];
-		field->scratch[leftIndex].momentum[0] -= scale * leftFlux[1];
-		field->scratch[leftIndex].momentum[1] -= scale * leftFlux[2];
+	if ( other && ( other->flags & SAILING_RIVER_CELL_ACTIVE ) ) {
+		left = forward ? self : other;
+		right = forward ? other : self;
 	}
-	else if ( right && ( right->flags & SAILING_RIVER_CELL_ACTIVE ) ) {
-		sailingRiverCell_t wall = *right;
-
-		wall.momentum[0] = -wall.momentum[0];
-		BG_SailingRiverHydrostaticFlux( &wall, right, 0, gravity,
-			leftFlux, rightFlux );
-		field->scratch[rightIndex].depth += scale * rightFlux[0];
-		field->scratch[rightIndex].momentum[0] += scale * rightFlux[1];
-		field->scratch[rightIndex].momentum[1] += scale * rightFlux[2];
+	else {
+		wall = *self;
+		wall.momentum[axis] = -wall.momentum[axis];
+		left = forward ? self : &wall;
+		right = forward ? &wall : self;
+	}
+	BG_SailingRiverHydrostaticFlux( left, right, axis, gravity,
+		leftFlux, rightFlux );
+	if ( forward ) {
+		field->scratch[index].depth -= scale * leftFlux[0];
+		field->scratch[index].momentum[axis] -= scale * leftFlux[1];
+		field->scratch[index].momentum[1 - axis] -= scale * leftFlux[2];
+	}
+	else {
+		field->scratch[index].depth += scale * rightFlux[0];
+		field->scratch[index].momentum[axis] += scale * rightFlux[1];
+		field->scratch[index].momentum[1 - axis] += scale * rightFlux[2];
 	}
 }
 
-/* One Y face, between lowerIndex and lowerIndex + width. */
-static void BG_SailingRiverStepFaceY( sailingRiverField_t *field,
-	int lowerIndex, int upperIndex, float gravity, float scale,
-	float *lowerFlux, float *upperFlux ) {
-	const sailingRiverCell_t *lower = lowerIndex >= 0
-		? &field->cells[lowerIndex] : NULL;
-	const sailingRiverCell_t *upper = upperIndex >= 0
-		? &field->cells[upperIndex] : NULL;
+/* All four faces of one work item, writing only that item's cell. */
+void BG_SailingRiverStepFaceWork( const sailingRiverFaceJob_t *job,
+	int workIndex ) {
+	sailingRiverField_t *field = job->field;
+	int index = field->captureQueue[workIndex];
+	int cellX;
+	int cellY;
 
-	if ( (!lower || lower->depth <= 0.0f) && (!upper || upper->depth <= 0.0f) ) return;
-
-	if ( lower && upper && ( lower->flags & SAILING_RIVER_CELL_ACTIVE )
-		&& ( upper->flags & SAILING_RIVER_CELL_ACTIVE ) ) {
-		BG_SailingRiverHydrostaticFlux( lower, upper, 1, gravity,
-			lowerFlux, upperFlux );
-		field->scratch[lowerIndex].depth -= scale * lowerFlux[0];
-		field->scratch[upperIndex].depth += scale * upperFlux[0];
-		field->scratch[lowerIndex].momentum[1] -= scale * lowerFlux[1];
-		field->scratch[upperIndex].momentum[1] += scale * upperFlux[1];
-		field->scratch[lowerIndex].momentum[0] -= scale * lowerFlux[2];
-		field->scratch[upperIndex].momentum[0] += scale * upperFlux[2];
-	}
-	else if ( lower && ( lower->flags & SAILING_RIVER_CELL_ACTIVE ) ) {
-		sailingRiverCell_t wall = *lower;
-
-		wall.momentum[1] = -wall.momentum[1];
-		BG_SailingRiverHydrostaticFlux( lower, &wall, 1, gravity,
-			lowerFlux, upperFlux );
-		field->scratch[lowerIndex].depth -= scale * lowerFlux[0];
-		field->scratch[lowerIndex].momentum[1] -= scale * lowerFlux[1];
-		field->scratch[lowerIndex].momentum[0] -= scale * lowerFlux[2];
-	}
-	else if ( upper && ( upper->flags & SAILING_RIVER_CELL_ACTIVE ) ) {
-		sailingRiverCell_t wall = *upper;
-
-		wall.momentum[1] = -wall.momentum[1];
-		BG_SailingRiverHydrostaticFlux( &wall, upper, 1, gravity,
-			lowerFlux, upperFlux );
-		field->scratch[upperIndex].depth += scale * upperFlux[0];
-		field->scratch[upperIndex].momentum[1] += scale * upperFlux[1];
-		field->scratch[upperIndex].momentum[0] += scale * upperFlux[2];
-	}
+	BG_SailingRiverFieldCellCoords( field, field->gridIndexOf[index],
+		&cellX, &cellY );
+	BG_SailingRiverGatherFace( field, index,
+		BG_SailingRiverFieldIndex( field, cellX + 1, cellY ),
+		0, qtrue, job->gravity, job->scale );
+	BG_SailingRiverGatherFace( field, index,
+		BG_SailingRiverFieldIndex( field, cellX - 1, cellY ),
+		0, qfalse, job->gravity, job->scale );
+	BG_SailingRiverGatherFace( field, index,
+		BG_SailingRiverFieldIndex( field, cellX, cellY + 1 ),
+		1, qtrue, job->gravity, job->scale );
+	BG_SailingRiverGatherFace( field, index,
+		BG_SailingRiverFieldIndex( field, cellX, cellY - 1 ),
+		1, qfalse, job->gravity, job->scale );
 }
 
 void BG_SailingRiverFieldInvalidateActive( sailingRiverField_t *field ) {
@@ -1296,51 +1275,27 @@ qboolean BG_SailingRiverFieldStep( sailingRiverField_t *field,
 	scale = timeStep / field->cellSize;
 
 	/*
-	 * Both face passes walk the wet/frontier list rather than the rectangle, and are
-	 * merged because they only ever read field->cells and only ever write
-	 * field->scratch - so they do not see each other's work and the order
-	 * between them cannot matter.
+	 * Gather: every work item computes all four of its own faces and writes
+	 * only its own cell, so no two touch the same memory and the pass can be
+	 * split across threads without changing the answer. It reads field->cells
+	 * and writes field->scratch, so nothing here sees another item's new state.
 	 *
-	 * Each face is visited exactly once. An active cell always takes the face
-	 * on its +X and +Y sides; it takes the face on its -X or -Y side only when
-	 * the neighbour there is inactive, because an active neighbour would have
-	 * taken that same face as its own +side. That reproduces the old
-	 * "either side active" rectangle sweep without the dry cells.
+	 * The cost is that each face is computed twice, once from either side.
+	 * That is the price of the independence.
 	 */
-	for ( i = 0; i < field->workCount; i++ ) {
-		int index = field->captureQueue[i];
-		int cellX;
-		int cellY;
-		int neighbor;
-		float nearFlux[3];
-		float farFlux[3];
+	{
+		sailingRiverFaceJob_t job;
 
-		BG_SailingRiverFieldCellCoords( field, field->gridIndexOf[index],
-			&cellX, &cellY );
-		/*
-		 * The +X and +Y faces always, the -X and -Y faces only when the
-		 * neighbour there is not itself an active cell that would claim the
-		 * same face as its own + side. A missing neighbour (-1, whether off
-		 * the grid or outside the zone) is a wall, and taking it here is what
-		 * lets the old rectangle-edge passes go away.
-		 */
-		neighbor = BG_SailingRiverFieldIndex( field, cellX + 1, cellY );
-		BG_SailingRiverStepFaceX( field, index, neighbor, gravity, scale,
-			nearFlux, farFlux );
-		neighbor = BG_SailingRiverFieldIndex( field, cellX - 1, cellY );
-		if ( neighbor < 0 || !( field->cells[neighbor].flags
-			& SAILING_RIVER_CELL_ACTIVE ) ) {
-			BG_SailingRiverStepFaceX( field, neighbor, index, gravity, scale,
-				nearFlux, farFlux );
+		job.field = field;
+		job.gravity = gravity;
+		job.scale = scale;
+		if ( bgSailingRiverParallelFor ) {
+			bgSailingRiverParallelFor( &job, field->workCount );
 		}
-		neighbor = BG_SailingRiverFieldIndex( field, cellX, cellY + 1 );
-		BG_SailingRiverStepFaceY( field, index, neighbor, gravity, scale,
-			nearFlux, farFlux );
-		neighbor = BG_SailingRiverFieldIndex( field, cellX, cellY - 1 );
-		if ( neighbor < 0 || !( field->cells[neighbor].flags
-			& SAILING_RIVER_CELL_ACTIVE ) ) {
-			BG_SailingRiverStepFaceY( field, neighbor, index, gravity, scale,
-				nearFlux, farFlux );
+		else {
+			for ( i = 0; i < field->workCount; i++ ) {
+				BG_SailingRiverStepFaceWork( &job, i );
+			}
 		}
 	}
 

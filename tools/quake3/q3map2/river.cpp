@@ -245,8 +245,12 @@ static void RiverSolveOne( const entity_t& river, float cellSizeOverride,
 
 	Sys_Printf( "--- Solving (%s) ---\n", s_job.name.c_str() );
 	RiverSolveSetReporter( RiverReport );
+	RiverSolveStartThreads( numthreads );
+	Sys_Printf( "%9d threads\n", numthreads );
 
-	if ( !RiverSolve( in, RiverStageBrushTest, out ) ) {
+	const bool solved = RiverSolve( in, RiverStageBrushTest, out );
+	RiverSolveStopThreads();
+	if ( !solved ) {
 		Sys_Warning( "river '%s' could not be solved\n", s_job.name.c_str() );
 		return;
 	}

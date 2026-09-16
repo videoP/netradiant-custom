@@ -1858,6 +1858,8 @@ int                         RiverbedMain( Args& args );
 /* river.cpp */
 int                         RiverMain( Args& args );
 void                        RiverSolveSetReporter( void ( *reporter )( const char *text ) );
+void                        RiverSolveStartThreads( int threads );
+void                        RiverSolveStopThreads();
 
 
 /* image.c */
