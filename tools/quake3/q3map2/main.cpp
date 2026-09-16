@@ -204,6 +204,11 @@ int main( int argc, char **argv ){
 		r = RiverbedMain( args );
 	}
 
+	/* river solve */
+	else if ( args.takeFront( "-river" ) ) {
+		r = RiverMain( args );
+	}
+
 	/* ydnar: lightmap export */
 	else if ( args.takeFront( "-export" ) ) {
 		r = ExportLightmapsMain( args );

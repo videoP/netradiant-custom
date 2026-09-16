@@ -1855,6 +1855,11 @@ int                         ExportEntitiesMain( Args& args );
 int                         RiverbedMain( Args& args );
 
 
+/* river.cpp */
+int                         RiverMain( Args& args );
+void                        RiverSolveSetReporter( void ( *reporter )( const char *text ) );
+
+
 /* image.c */
 const image_t               *ImageLoad( const char *name );
 

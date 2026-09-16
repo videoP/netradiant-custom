@@ -49,6 +49,7 @@
 
 /* dependencies */
 #include "q3map2.h"
+#include "riverbed.h"
 
 
 
@@ -78,15 +79,6 @@ struct riverbedHeader_t
 	char river[ 64 ];               /* targetname, so the engine can match it up */
 };
 
-#define RIVERBED_CELL_ACTIVE    0x00000001u
-
-struct riverbedCell_t
-{
-	float bedHeight;
-	float ceilingHeight;
-	unsigned int flags;
-};
-
 /* CONTENTS_SOLID is bit 0 in every id-derived game, and the BSP stores the
    game's raw content flags rather than q3map2's internal C_* set */
 #define RIVERBED_CONTENTS_SOLID 1
@@ -111,15 +103,7 @@ struct riverbedSpan_t
 	float top;
 };
 
-/* one solid brush, with the bounds used to bucket it */
-struct riverbedBrush_t
-{
-	int firstSide;
-	int numSides;
-	MinMax minmax;
-};
-
-static std::vector<riverbedBrush_t> s_solidBrushes;
+std::vector<riverbedBrush_t> s_solidBrushes;
 
 /* uniform XY buckets over the world, each holding the brushes that overlap it */
 #define RIVERBED_BUCKET_SIZE    1024.0f
@@ -196,7 +180,7 @@ static bool RiverbedBrushBounds( int firstSide, int numSides, MinMax& minmax ){
    Collects the solid brushes of the world model and buckets them by XY.
  */
 
-static void RiverbedBuildSolidIndex(){
+void RiverbedBuildSolidIndex(){
 	s_solidBrushes.clear();
 	s_buckets.clear();
 
@@ -322,27 +306,7 @@ static void RiverbedColumnSpans( float x, float y, std::vector<riverbedSpan_t>& 
 
    ------------------------------------------------------------------------------- */
 
-struct riverbedJob_t
-{
-	std::string name;
-	int zoneModel;
-	MinMax minmax;                  /* corridor brush bounds, plus entity origin */
-	Vector3 zoneOrigin;
-	float cellSize;
-	float captureHeadroom;
-
-	int width;
-	int height;
-	float origin[ 2 ];
-
-	std::vector<int> cellIndex;     /* grid -> compact, or -1 outside the corridor */
-	std::vector<riverbedCell_t> cells;
-
-	std::vector<MinMax> sources;    /* inlet brush bounds, in entity order */
-	std::vector<int> sourceModels;
-};
-
-static riverbedJob_t s_job;
+riverbedJob_t s_job;
 
 /*
    RiverbedCellCenter()
@@ -367,7 +331,7 @@ inline float RiverbedCellCenterY( int y ){
    in the normal direction.
  */
 
-static bool RiverbedBoxHitsModel( int modelNum, const Vector3& translation, const MinMax& box ){
+bool RiverbedBoxHitsModel( int modelNum, const Vector3& translation, const MinMax& box ){
 	if ( modelNum <= 0 || modelNum >= int( bspModels.size() ) ) {
 		return false;
 	}
@@ -567,7 +531,7 @@ static int RiverbedCapture(){
 	/* seeds, in entity order then row major, matching the engine */
 	for ( size_t s = 0; s < s_job.sources.size(); ++s )
 	{
-		const MinMax& source = s_job.sources[ s ];
+		const MinMax& source = s_job.sources[ s ].minmax;
 		const float half = 0.5f * s_job.cellSize;
 
 		for ( int y = 0; y < s_job.height; ++y )
@@ -593,8 +557,9 @@ static int RiverbedCapture(){
 				   several times its own area */
 				const MinMax box( Vector3( centerX - half, centerY - half, source.mins[ 2 ] ),
 				                  Vector3( centerX + half, centerY + half, source.maxs[ 2 ] ) );
-				if ( s_job.sourceModels[ s ] > 0
-				  && !RiverbedBoxHitsModel( s_job.sourceModels[ s ], Vector3( 0 ), box ) ) {
+				if ( s_job.sources[ s ].model > 0
+				  && !RiverbedBoxHitsModel( s_job.sources[ s ].model,
+				                            s_job.sources[ s ].origin, box ) ) {
 					continue;
 				}
 
@@ -708,6 +673,108 @@ static bool RiverbedModelBounds( int modelNum, const Vector3& translation, MinMa
 }
 
 /*
+   RiverbedReadBoundaries()
+   Collects this river's inlets and outlets, in entity order.
+
+   The order is load bearing rather than cosmetic: the engine's settings hash
+   walks its own tables in registration order, which is the order the entities
+   appear in the bsp, so gathering them any other way produces a hash the engine
+   will not accept.  Every key is read the way the engine reads it, defaults
+   included, for the same reason.
+ */
+
+static void RiverbedReadBoundaries(){
+	for ( const entity_t& ent : entities )
+	{
+		const bool isSource = ent.classname_is( "misc_sailing_river_source" );
+		const bool isSink = ent.classname_is( "misc_sailing_river_sink" );
+		if ( !isSource && !isSink ) {
+			continue;
+		}
+		if ( !striEqual( ent.valueForKey( "target" ), s_job.name.c_str() ) ) {
+			continue;
+		}
+
+		const int model = RiverbedInlineModel( ent.valueForKey( "model" ) );
+		const Vector3 origin = ent.vectorForKey( "origin" );
+		MinMax bounds;
+		if ( !RiverbedModelBounds( model, origin, bounds ) ) {
+			continue;
+		}
+
+		/* "angle" is the flow direction here, not a rotation of the brush */
+		const float yaw = ent.floatForKey( "angle" ) * float( c_pi ) / 180.0f;
+		const float dirX = cosf( yaw );
+		const float dirY = sinf( yaw );
+
+		if ( isSource ) {
+			riverbedSourceEnt_t source;
+			source.minmax = bounds;
+			source.model = model;
+			source.origin = origin;
+			source.direction[ 0 ] = dirX;
+			source.direction[ 1 ] = dirY;
+
+			const char *type = ent.valueForKey( "type" );
+			if ( striEqual( type, "velocity" ) ) {
+				source.type = 1;
+			}
+			else if ( strEmptyOrNull( type ) || striEqual( type, "discharge" ) ) {
+				source.type = 0;
+			}
+			else{
+				Sys_Warning( "river source has unknown type '%s', skipping\n", type );
+				continue;
+			}
+
+			source.discharge = ent.floatForKey( "discharge" ) * 12.0f * 12.0f * 12.0f;
+			source.speed = ent.floatForKey( "speed" );
+			/* defaults to the brush top, as the engine does */
+			source.surfaceHeight = bounds.maxs[ 2 ];
+			ent.read_keyvalue( source.surfaceHeight, "surfaceHeight" );
+			s_job.sources.push_back( source );
+		}
+		else{
+			riverbedSinkEnt_t sink;
+			sink.minmax = bounds;
+			sink.model = model;
+			sink.origin = origin;
+			sink.direction[ 0 ] = dirX;
+			sink.direction[ 1 ] = dirY;
+
+			const char *type = ent.valueForKey( "type" );
+			if ( striEqual( type, "fixed" ) ) {
+				sink.type = 1;
+			}
+			else if ( striEqual( type, "normal" ) ) {
+				sink.type = 2;
+			}
+			else if ( striEqual( type, "overfall" ) ) {
+				sink.type = 3;
+			}
+			else if ( striEqual( type, "drain" ) ) {
+				sink.type = 4;
+			}
+			else if ( strEmptyOrNull( type ) || striEqual( type, "open" ) ) {
+				sink.type = 0;
+			}
+			else{
+				Sys_Warning( "river sink has unknown type '%s', skipping\n", type );
+				continue;
+			}
+
+			/* a drain's invert defaults to the brush FLOOR; everything else
+			   defaults to its top */
+			sink.surfaceHeight = sink.type == 4 ? bounds.mins[ 2 ] : bounds.maxs[ 2 ];
+			ent.read_keyvalue( sink.surfaceHeight, "surfaceHeight" );
+			sink.drainRate = 0.05f;
+			ent.read_keyvalue( sink.drainRate, "drainRate" );
+			s_job.sinks.push_back( sink );
+		}
+	}
+}
+
+/*
    RiverbedSetupGrid()
    Grid derivation, which has to match the engine exactly or every cell is
    offset.  The engine stores no copy of this - it recomputes it from the same
@@ -731,7 +798,7 @@ static bool RiverbedSetupGrid(){
 	return true;
 }
 
-static void RiverbedWrite( const char *bspPath ){
+void RiverbedWrite( const char *bspPath ){
 	riverbedHeader_t header;
 	memset( &header, 0, sizeof( header ) );
 	header.magic = RIVERBED_MAGIC;
@@ -783,20 +850,20 @@ static void RiverbedWrite( const char *bspPath ){
    Builds one river, start to finish.
  */
 
-static void RiverbedRiver( const entity_t& river, float cellSizeOverride, const char *bspPath ){
+bool RiverbedPrepare( const entity_t& river, float cellSizeOverride ){
 	s_job = riverbedJob_t();
 
 	s_job.name = river.valueForKey( "targetname" );
 	if ( s_job.name.empty() ) {
 		Sys_Warning( "misc_sailing_river has no targetname, skipping\n" );
-		return;
+		return false;
 	}
 
 	s_job.zoneModel = RiverbedInlineModel( river.valueForKey( "model" ) );
 	s_job.zoneOrigin = river.vectorForKey( "origin" );
 	if ( !RiverbedModelBounds( s_job.zoneModel, s_job.zoneOrigin, s_job.minmax ) ) {
 		Sys_Warning( "river '%s' has no usable brush model, skipping\n", s_job.name.c_str() );
-		return;
+		return false;
 	}
 
 	s_job.cellSize = cellSizeOverride > 0.0f ? cellSizeOverride : river.floatForKey( "cellSize" );
@@ -811,36 +878,23 @@ static void RiverbedRiver( const entity_t& river, float cellSizeOverride, const 
 	}
 	s_job.captureHeadroom = std::min( 256.0f, s_job.captureHeadroom );
 
+	s_job.friction = 0.12f;         /* the engine's default for the key */
+	river.read_keyvalue( s_job.friction, "friction" );
+	s_job.friction = std::min( 2.0f, std::max( 0.001f, s_job.friction ) );
+
 	if ( !RiverbedSetupGrid() ) {
-		return;
+		return false;
 	}
 
 	Sys_Printf( "--- Riverbed (%s) ---\n", s_job.name.c_str() );
 	Sys_Printf( "%9.0f cell size\n", s_job.cellSize );
 	Sys_Printf( "%9d x %d grid\n", s_job.width, s_job.height );
 
-	/* inlets, in entity order, so seeding matches the engine */
-	for ( const entity_t& ent : entities )
-	{
-		if ( !ent.classname_is( "misc_sailing_river_source" ) ) {
-			continue;
-		}
-		if ( !striEqual( ent.valueForKey( "target" ), s_job.name.c_str() ) ) {
-			continue;
-		}
-
-		const int model = RiverbedInlineModel( ent.valueForKey( "model" ) );
-		MinMax bounds;
-		if ( !RiverbedModelBounds( model, ent.vectorForKey( "origin" ), bounds ) ) {
-			continue;
-		}
-		s_job.sources.push_back( bounds );
-		s_job.sourceModels.push_back( model );
-	}
+	RiverbedReadBoundaries();
 
 	if ( s_job.sources.empty() ) {
 		Sys_Warning( "river '%s' has no source, skipping\n", s_job.name.c_str() );
-		return;
+		return false;
 	}
 
 	/* rasterize the corridor */
@@ -856,18 +910,14 @@ static void RiverbedRiver( const entity_t& river, float cellSizeOverride, const 
 
 	if ( occupied == 0 ) {
 		Sys_Warning( "river '%s' corridor covers no cell, skipping\n", s_job.name.c_str() );
-		return;
+		return false;
 	}
 	s_job.cells.resize( occupied );
 
 	const int captured = RiverbedCapture();
 
 	Sys_Printf( "%9d cells captured of %d in the corridor\n", captured, occupied );
-	if ( captured == 0 ) {
-		return;
-	}
-
-	RiverbedWrite( bspPath );
+	return captured != 0;
 }
 
 /*
@@ -910,7 +960,9 @@ int RiverbedMain( Args& args ){
 	for ( const entity_t& ent : entities )
 	{
 		if ( ent.classname_is( "misc_sailing_river" ) ) {
-			RiverbedRiver( ent, cellSizeOverride, source );
+			if ( RiverbedPrepare( ent, cellSizeOverride ) ) {
+				RiverbedWrite( source );
+			}
 			++rivers;
 		}
 	}

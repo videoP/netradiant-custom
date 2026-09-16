@@ -355,6 +355,16 @@ static void HelpExportEnts()
 	HelpOptions( "ExportEnts Stage", 0, 80, options );
 }
 
+static void HelpRiver()
+{
+	const std::vector<HelpOption> options = {
+		{ "-river <filename.bsp>", "Solves misc_sailing_river entities to steady state and bakes the water (.river)" },
+		{ "-cellsize <F>", "Override the entity's cellSize; one file is written per size" },
+		{ "-maxsteps <N>", "Stop after N solver steps instead of waiting for it to settle" },
+	};
+	HelpOptions( "River Stage", 0, 80, options );
+}
+
 static void HelpRiverbed()
 {
 	const std::vector<HelpOption> options = {
@@ -514,6 +524,7 @@ void HelpMain( const char* arg )
 		{ "-json", "BSP json export/import" },
 		{ "-mergebsp", "BSP merge" },
 		{ "-riverbed", "River bed precompute" },
+		{ "-river", "River solve and water bake" },
 	};
 	void( *help_funcs[] )() = {
 		HelpBsp,
@@ -534,6 +545,7 @@ void HelpMain( const char* arg )
 		HelpJson,
 		HelpMergeBsp,
 		HelpRiverbed,
+		HelpRiver,
 	};
 
 	if ( !strEmptyOrNull( arg ) )
