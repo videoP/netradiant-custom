@@ -44,7 +44,7 @@ FUNCTIONS = [
     "BG_SailingRiverFieldApplyBoundaries",
     "BG_SailingRiverHydrostaticFlux",
     "BG_SailingRiverGatherFace",
-    "BG_SailingRiverStepFaceWork",
+    "BG_SailingRiverStepSlice",
     "BG_SailingRiverFieldInvalidateActive",
     "BG_SailingRiverFieldRefreshActive",
     "BG_SailingRiverWorkAdd",

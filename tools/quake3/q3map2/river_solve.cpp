@@ -62,18 +62,19 @@ static void RiverPrint( const char *format, ... ){
 
    ------------------------------------------------------------------------- */
 
-static sailingRiverFaceJob_t s_faceJob;
-static int s_faceWorkCount;
+static sailingRiverStepJob_t s_stepJob;
+static int s_sliceCount;
 static int s_threadCount;
 static std::thread *s_threads;
-static std::atomic<unsigned> s_faceEpoch;
-static std::atomic<int> s_faceRemaining;
-static std::atomic<bool> s_faceQuit;
+static std::atomic<unsigned> s_epoch;
+static std::atomic<int> s_nextSlice;
+static std::atomic<int> s_remaining;
+static std::atomic<bool> s_quit;
 
-/* Spin briefly before yielding. yield() is a syscall on Windows, and at this
-   size a step is tens of microseconds - a couple of syscalls per barrier costs
-   more than the work being shared. Threads here never outnumber the cores, so
-   a short pure spin is the cheap path and the yield is only a safety valve. */
+/* Spin briefly before yielding. yield() is a syscall on Windows and a pass is
+   tens of microseconds, so a couple of syscalls per barrier would cost more
+   than the work being shared. Threads never outnumber the cores here, so a
+   short pure spin is the cheap path and the yield is a safety valve. */
 static inline void RiverSpin( int& spins ){
 	if ( ++spins < 4096 ) {
 #if defined( __i386__ ) || defined( __x86_64__ )
@@ -87,73 +88,74 @@ static inline void RiverSpin( int& spins ){
 }
 
 /*
- * One thread's share, as a contiguous block.
- *
- * Striding instead - thread n taking every nth item - looks better balanced and
- * is drastically worse: a water record is 12 bytes, so five of them share a
- * 64-byte line, and with a stride of one thread per item every line ends up
- * written by five different cores. The resulting false sharing cost all but
- * 1.27x of a 24-core machine. Blocked ranges keep each line private to one
- * thread apart from the two at the seams, and the work per item is even enough
- * that the balance never mattered.
+   Slices are claimed from a shared counter rather than dealt out in advance.
+   There are more slices than threads, and their costs differ - a slice deep in
+   the wet set does far more than one on the frontier - so handing each thread a
+   fixed share leaves most of them waiting on the slowest. Which thread runs
+   which slice does not affect the result: every slice writes only its own cells
+   and its own totals entry, and those are combined in slice order afterwards.
  */
-static void RiverFaceSlice( int id ){
-	const int perThread = ( s_faceWorkCount + s_threadCount - 1 ) / s_threadCount;
-	const int first = id * perThread;
-	const int last = std::min( first + perThread, s_faceWorkCount );
+static void RiverRunSlices(){
+	for (;;)
+	{
+		const int slice = s_nextSlice.fetch_add( 1, std::memory_order_relaxed );
 
-	for ( int i = first; i < last; ++i )
-		BG_SailingRiverStepFaceWork( &s_faceJob, i );
+		if ( slice >= s_sliceCount ) {
+			return;
+		}
+		BG_SailingRiverStepSlice( &s_stepJob, slice );
+	}
 }
 
-static void RiverFaceWorker( int id ){
+static void RiverSliceWorker(){
 	unsigned seen = 0;
 	int spins = 0;
 
 	for (;;)
 	{
-		while ( s_faceEpoch.load( std::memory_order_acquire ) == seen )
+		while ( s_epoch.load( std::memory_order_acquire ) == seen )
 		{
-			if ( s_faceQuit.load( std::memory_order_relaxed ) ) {
+			if ( s_quit.load( std::memory_order_relaxed ) ) {
 				return;
 			}
 			RiverSpin( spins );
 		}
-		seen = s_faceEpoch.load( std::memory_order_acquire );
+		seen = s_epoch.load( std::memory_order_acquire );
 		/*
 		 * Shutdown bumps the epoch to wake everyone, so waking is not on its
 		 * own a reason to work: by then RiverSolve has freed the field, and
-		 * running the previous dispatch again is a use-after-free.
+		 * re-running the last pass over it is a use-after-free.
 		 */
-		if ( s_faceQuit.load( std::memory_order_acquire ) ) {
+		if ( s_quit.load( std::memory_order_acquire ) ) {
 			return;
 		}
 		spins = 0;
-		RiverFaceSlice( id );
-		s_faceRemaining.fetch_sub( 1, std::memory_order_release );
+		RiverRunSlices();
+		s_remaining.fetch_sub( 1, std::memory_order_release );
 	}
 }
 
-static void RiverParallelFaces( const sailingRiverFaceJob_t *job, int count ){
+static void RiverParallelSlices( const sailingRiverStepJob_t *job, int slices ){
 	/* Below this the barrier costs more than the work it hides, which is most
 	   of the early solve while the wet set is still a thin tongue. */
-	if ( s_threadCount <= 1 || count < 32768 ) {
-		for ( int i = 0; i < count; ++i )
-			BG_SailingRiverStepFaceWork( job, i );
+	if ( s_threadCount <= 1 || job->field->workCount < 32768 ) {
+		for ( int i = 0; i < slices; ++i )
+			BG_SailingRiverStepSlice( job, i );
 		return;
 	}
 
-	s_faceJob = *job;
-	s_faceWorkCount = count;
-	s_faceRemaining.store( s_threadCount - 1, std::memory_order_relaxed );
-	s_faceEpoch.fetch_add( 1, std::memory_order_release );
+	s_stepJob = *job;
+	s_sliceCount = slices;
+	s_nextSlice.store( 0, std::memory_order_relaxed );
+	s_remaining.store( s_threadCount - 1, std::memory_order_relaxed );
+	s_epoch.fetch_add( 1, std::memory_order_release );
 
-	/* The calling thread takes a share too: leaving it to spin would leave one
-	   core idle and oversubscribe another. */
-	RiverFaceSlice( s_threadCount - 1 );
+	/* The calling thread takes slices too: leaving it to spin would idle one
+	   core and oversubscribe another. */
+	RiverRunSlices();
 
 	int spins = 0;
-	while ( s_faceRemaining.load( std::memory_order_acquire ) > 0 )
+	while ( s_remaining.load( std::memory_order_acquire ) > 0 )
 		RiverSpin( spins );
 }
 
@@ -169,21 +171,21 @@ void RiverSolveStartThreads( int threads ){
 		return;
 	}
 	s_threadCount = threads;
-	s_faceQuit.store( false );
-	s_faceEpoch.store( 0 );
-	s_faceRemaining.store( 0 );
+	s_quit.store( false );
+	s_epoch.store( 0 );
+	s_remaining.store( 0 );
 	s_threads = new std::thread[ s_threadCount - 1 ];
 	for ( int i = 0; i < s_threadCount - 1; ++i )
-		s_threads[ i ] = std::thread( RiverFaceWorker, i );
-	bgSailingRiverParallelFor = RiverParallelFaces;
+		s_threads[ i ] = std::thread( RiverSliceWorker );
+	bgSailingRiverParallelFor = RiverParallelSlices;
 }
 
 void RiverSolveStopThreads(){
 	if ( s_threads == NULL ) {
 		return;
 	}
-	s_faceQuit.store( true );
-	s_faceEpoch.fetch_add( 1, std::memory_order_release );
+	s_quit.store( true );
+	s_epoch.fetch_add( 1, std::memory_order_release );
 	for ( int i = 0; i < s_threadCount - 1; ++i )
 		s_threads[ i ].join();
 	delete[] s_threads;

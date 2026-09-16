@@ -254,17 +254,41 @@ enum {
 typedef qboolean ( *sailingRiverBrushTest_t )( int kind, int index,
                                                const vec3_t mins, const vec3_t maxs );
 
-/* One work item of the face pass, and the optional dispatcher for it. Gather
-   makes every item independent, so the pass can be split across threads without
-   changing the answer; the engine leaves the hook NULL, the compiler sets it. */
-typedef struct sailingRiverFaceJob_s {
+/* A step, split into four passes over the work list, and the dispatcher for
+   them. The slice count is fixed rather than following the thread count so the
+   update pass's sums are combined in the same order everywhere - that is what
+   keeps a bake reproducible and a client and server in agreement. */
+#define SAILING_RIVER_STEP_SLICES 64
+
+enum {
+	SAILING_RIVER_STEP_COPY,
+	SAILING_RIVER_STEP_FACES,
+	SAILING_RIVER_STEP_UPDATE,
+	SAILING_RIVER_STEP_COMMIT,
+	SAILING_RIVER_STEP_SIGNAL
+};
+
+typedef struct sailingRiverStepTotals_s {
+	float signalSpeed;
+	float depthChange;
+	float depthTotal;
+	int clampedCells;
+	int resetCells;
+	int wetCells;
+} sailingRiverStepTotals_t;
+
+typedef struct sailingRiverStepJob_s {
 	sailingRiverField_t *field;
 	float gravity;
 	float scale;
-} sailingRiverFaceJob_t;
+	float timeStep;
+	float friction;
+	int pass;
+	sailingRiverStepTotals_t *totals;
+} sailingRiverStepJob_t;
 
-typedef void ( *sailingRiverParallelFor_t )( const sailingRiverFaceJob_t *job,
-                                             int count );
+typedef void ( *sailingRiverParallelFor_t )( const sailingRiverStepJob_t *job,
+                                             int slices );
 extern sailingRiverParallelFor_t bgSailingRiverParallelFor;
 
 /* ---- the entity tables the boundary code reads ---- */

@@ -30,7 +30,7 @@ void BG_SailingRiverFieldApplyBoundariesOverride( sailingRiverField_t *field, co
 void BG_SailingRiverFieldApplyBoundaries( sailingRiverField_t *field, const sailingRiver_t *river, float timeStep, float friction );
 static void BG_SailingRiverHydrostaticFlux( const sailingRiverCell_t *left, const sailingRiverCell_t *right, int axis, float gravity, float leftFluxResult[3], float rightFluxResult[3] );
 static void BG_SailingRiverGatherFace( sailingRiverField_t *field, int index, int neighbor, int axis, qboolean forward, float gravity, float scale );
-void BG_SailingRiverStepFaceWork( const sailingRiverFaceJob_t *job, int workIndex );
+void BG_SailingRiverStepSlice( const sailingRiverStepJob_t *job, int slice );
 void BG_SailingRiverFieldInvalidateActive( sailingRiverField_t *field );
 static void BG_SailingRiverFieldRefreshActive( sailingRiverField_t *field );
 static void BG_SailingRiverWorkAdd( sailingRiverField_t *field, int index );
@@ -381,6 +381,8 @@ void BG_SailingRiverFieldInitializeWater( sailingRiverField_t *field,
 
 float BG_SailingRiverFieldTimeStep( sailingRiverField_t *field,
 	float gravity, float cfl, float maximumTimeStep ) {
+	sailingRiverStepTotals_t totals[SAILING_RIVER_STEP_SLICES];
+	sailingRiverStepJob_t job;
 	float maximumSignalSpeed = 0.0f;
 	int i;
 
@@ -389,20 +391,26 @@ float BG_SailingRiverFieldTimeStep( sailingRiverField_t *field,
 		return 0.0f;
 	}
 	BG_SailingRiverPrepareWork( field );
-	for ( i = 0; i < field->workCount; i++ ) {
-		const sailingRiverCell_t *cell = &field->cells[field->captureQueue[i]];
-		float speed;
-		float signalSpeed;
 
-		if ( !( cell->flags & SAILING_RIVER_CELL_ACTIVE )
-			|| cell->depth <= 0.001f ) {
-			continue;
-		}
-		speed = sqrtf( VectorLengthSquared2( cell->momentum ) )
-			/ cell->depth;
-		signalSpeed = speed + sqrtf( gravity * cell->depth );
-		maximumSignalSpeed = Q_max( maximumSignalSpeed, signalSpeed );
+	memset( totals, 0, sizeof( totals ) );
+	memset( &job, 0, sizeof( job ) );
+	job.field = field;
+	job.gravity = gravity;
+	job.pass = SAILING_RIVER_STEP_SIGNAL;
+	job.totals = totals;
+	if ( bgSailingRiverParallelFor ) {
+		bgSailingRiverParallelFor( &job, SAILING_RIVER_STEP_SLICES );
 	}
+	else {
+		for ( i = 0; i < SAILING_RIVER_STEP_SLICES; i++ ) {
+			BG_SailingRiverStepSlice( &job, i );
+		}
+	}
+	for ( i = 0; i < SAILING_RIVER_STEP_SLICES; i++ ) {
+		maximumSignalSpeed = Q_max( maximumSignalSpeed,
+			totals[i].signalSpeed );
+	}
+
 	if ( maximumSignalSpeed <= 0.001f ) {
 		return maximumTimeStep;
 	}
@@ -1150,28 +1158,139 @@ static void BG_SailingRiverGatherFace( sailingRiverField_t *field, int index,
 	}
 }
 
-/* All four faces of one work item, writing only that item's cell. */
-void BG_SailingRiverStepFaceWork( const sailingRiverFaceJob_t *job,
-	int workIndex ) {
+/*
+ * One slice of one pass.
+ *
+ * Slices are contiguous ranges, not strided: a water record is 12 bytes, so
+ * five share a cache line, and handing alternate items to alternate threads
+ * makes every line contended. Contiguous ranges keep each line private bar the
+ * two at the seams.
+ */
+void BG_SailingRiverStepSlice( const sailingRiverStepJob_t *job, int slice ) {
 	sailingRiverField_t *field = job->field;
-	int index = field->captureQueue[workIndex];
-	int cellX;
-	int cellY;
+	const int count = field->workCount;
+	const int perSlice = ( count + SAILING_RIVER_STEP_SLICES - 1 )
+		/ SAILING_RIVER_STEP_SLICES;
+	const int first = slice * perSlice;
+	int last = first + perSlice;
+	int i;
 
-	BG_SailingRiverFieldCellCoords( field, field->gridIndexOf[index],
-		&cellX, &cellY );
-	BG_SailingRiverGatherFace( field, index,
-		BG_SailingRiverFieldIndex( field, cellX + 1, cellY ),
-		0, qtrue, job->gravity, job->scale );
-	BG_SailingRiverGatherFace( field, index,
-		BG_SailingRiverFieldIndex( field, cellX - 1, cellY ),
-		0, qfalse, job->gravity, job->scale );
-	BG_SailingRiverGatherFace( field, index,
-		BG_SailingRiverFieldIndex( field, cellX, cellY + 1 ),
-		1, qtrue, job->gravity, job->scale );
-	BG_SailingRiverGatherFace( field, index,
-		BG_SailingRiverFieldIndex( field, cellX, cellY - 1 ),
-		1, qfalse, job->gravity, job->scale );
+	if ( first >= count ) {
+		return;
+	}
+	if ( last > count ) {
+		last = count;
+	}
+
+	switch ( job->pass ) {
+	case SAILING_RIVER_STEP_COPY:
+		for ( i = first; i < last; i++ ) {
+			int index = field->captureQueue[i];
+
+			field->scratch[index].depth = field->cells[index].depth;
+			VectorCopy2( field->cells[index].momentum,
+				field->scratch[index].momentum );
+		}
+		break;
+
+	case SAILING_RIVER_STEP_FACES:
+		for ( i = first; i < last; i++ ) {
+			int index = field->captureQueue[i];
+			int cellX;
+			int cellY;
+
+			BG_SailingRiverFieldCellCoords( field, field->gridIndexOf[index],
+				&cellX, &cellY );
+			BG_SailingRiverGatherFace( field, index,
+				BG_SailingRiverFieldIndex( field, cellX + 1, cellY ),
+				0, qtrue, job->gravity, job->scale );
+			BG_SailingRiverGatherFace( field, index,
+				BG_SailingRiverFieldIndex( field, cellX - 1, cellY ),
+				0, qfalse, job->gravity, job->scale );
+			BG_SailingRiverGatherFace( field, index,
+				BG_SailingRiverFieldIndex( field, cellX, cellY + 1 ),
+				1, qtrue, job->gravity, job->scale );
+			BG_SailingRiverGatherFace( field, index,
+				BG_SailingRiverFieldIndex( field, cellX, cellY - 1 ),
+				1, qfalse, job->gravity, job->scale );
+		}
+		break;
+
+	case SAILING_RIVER_STEP_UPDATE: {
+		sailingRiverStepTotals_t *totals = &job->totals[slice];
+
+		for ( i = first; i < last; i++ ) {
+			int index = field->captureQueue[i];
+			const sailingRiverCell_t *cell = &field->cells[index];
+			sailingRiverWater_t *next = &field->scratch[index];
+			float speed;
+			float damping;
+
+			/* Separated from ordinary drying below purely so the diagnostic
+			 * counter means something: a dry cell is normal, a non-finite one
+			 * is a broken step. */
+			if ( Q_isnan( next->depth ) || Q_isnan( next->momentum[0] )
+				|| Q_isnan( next->momentum[1] ) ) {
+				next->depth = 0.0f;
+				VectorClear2( next->momentum );
+				totals->resetCells++;
+				continue;
+			}
+			if ( next->depth <= 0.001f ) {
+				next->depth = 0.0f;
+				VectorClear2( next->momentum );
+				continue;
+			}
+			speed = sqrtf( VectorLengthSquared2( next->momentum ) )
+				/ next->depth;
+			damping = 1.0f / ( 1.0f + job->friction * speed * job->timeStep
+				/ Q_max( next->depth, 1.0f ) );
+			VectorScale2( next->momentum, damping, next->momentum );
+			speed = sqrtf( VectorLengthSquared2( next->momentum ) )
+				/ next->depth;
+			if ( speed > 4096.0f ) {
+				VectorScale2( next->momentum, 4096.0f / speed,
+					next->momentum );
+				totals->clampedCells++;
+			}
+			totals->depthChange += fabsf( next->depth - cell->depth );
+			totals->depthTotal += next->depth;
+			totals->wetCells++;
+		}
+		break;
+	}
+
+	case SAILING_RIVER_STEP_SIGNAL: {
+		sailingRiverStepTotals_t *totals = &job->totals[slice];
+
+		for ( i = first; i < last; i++ ) {
+			const sailingRiverCell_t *cell =
+				&field->cells[field->captureQueue[i]];
+			float speed;
+			float signalSpeed;
+
+			if ( !( cell->flags & SAILING_RIVER_CELL_ACTIVE )
+				|| cell->depth <= 0.001f ) {
+				continue;
+			}
+			speed = sqrtf( VectorLengthSquared2( cell->momentum ) )
+				/ cell->depth;
+			signalSpeed = speed + sqrtf( job->gravity * cell->depth );
+			totals->signalSpeed = Q_max( totals->signalSpeed, signalSpeed );
+		}
+		break;
+	}
+
+	case SAILING_RIVER_STEP_COMMIT:
+		for ( i = first; i < last; i++ ) {
+			int index = field->captureQueue[i];
+
+			field->cells[index].depth = field->scratch[index].depth;
+			VectorCopy2( field->scratch[index].momentum,
+				field->cells[index].momentum );
+		}
+		break;
+	}
 }
 
 void BG_SailingRiverFieldInvalidateActive( sailingRiverField_t *field ) {
@@ -1249,107 +1368,60 @@ static void BG_SailingRiverPrepareWork( sailingRiverField_t *field ) {
 
 qboolean BG_SailingRiverFieldStep( sailingRiverField_t *field,
 	float timeStep, float gravity, float friction ) {
-	float scale;
-	int i;
+	sailingRiverStepTotals_t totals[SAILING_RIVER_STEP_SLICES];
+	sailingRiverStepJob_t job;
 	int clampedCells = 0;
 	int resetCells = 0;
 	float depthChange = 0.0f;
 	float depthTotal = 0.0f;
 	int wetCells = 0;
+	int pass;
+	int i;
 
 	if ( !field || !field->cells || !field->scratch || timeStep <= 0.0f
 		|| gravity <= 0.0f || friction < 0.0f ) {
 		return qfalse;
 	}
 	BG_SailingRiverPrepareWork( field );
-	/*
-	 * Only water in the wet/frontier set needs a next-state buffer.
-	 * Terrain and flags remain in the stable cell array throughout the solve.
-	 */
-	for ( i = 0; i < field->workCount; i++ ) {
-		int index = field->captureQueue[i];
 
-		field->scratch[index].depth = field->cells[index].depth;
-		VectorCopy2( field->cells[index].momentum, field->scratch[index].momentum );
-	}
-	scale = timeStep / field->cellSize;
+	memset( totals, 0, sizeof( totals ) );
+	job.field = field;
+	job.gravity = gravity;
+	job.scale = timeStep / field->cellSize;
+	job.timeStep = timeStep;
+	job.friction = friction;
+	job.totals = totals;
 
 	/*
-	 * Gather: every work item computes all four of its own faces and writes
-	 * only its own cell, so no two touch the same memory and the pass can be
-	 * split across threads without changing the answer. It reads field->cells
-	 * and writes field->scratch, so nothing here sees another item's new state.
+	 * Four passes, each a barrier apart because each reads what the last one
+	 * wrote: scratch is seeded, flux is accumulated into it, friction and
+	 * drying are applied, and only then is it published back into the cells.
+	 * Committing earlier would let a face read a neighbour's new state.
 	 *
-	 * The cost is that each face is computed twice, once from either side.
-	 * That is the price of the independence.
+	 * Every item within a pass is independent, so the dispatcher may run the
+	 * slices in any order or on any number of threads. Gathering is what buys
+	 * that: each item writes only its own cell.
 	 */
-	{
-		sailingRiverFaceJob_t job;
-
-		job.field = field;
-		job.gravity = gravity;
-		job.scale = scale;
+	for ( pass = SAILING_RIVER_STEP_COPY; pass <= SAILING_RIVER_STEP_COMMIT;
+		pass++ ) {
+		job.pass = pass;
 		if ( bgSailingRiverParallelFor ) {
-			bgSailingRiverParallelFor( &job, field->workCount );
+			bgSailingRiverParallelFor( &job, SAILING_RIVER_STEP_SLICES );
 		}
 		else {
-			for ( i = 0; i < field->workCount; i++ ) {
-				BG_SailingRiverStepFaceWork( &job, i );
+			for ( i = 0; i < SAILING_RIVER_STEP_SLICES; i++ ) {
+				BG_SailingRiverStepSlice( &job, i );
 			}
 		}
 	}
 
-	/*
-	 * The rectangle-edge passes that used to live here are gone. They existed
-	 * because the old face sweep only covered faces BETWEEN two grid cells, so
-	 * the outermost faces needed their own walls. The face pass above now
-	 * takes any face whose neighbour is missing, and outside the zone is
-	 * missing in exactly the same way as off the edge of the grid, so keeping
-	 * these would have applied a second wall to every boundary cell.
-	 */
-
-	/* Hydrostatic reconstruction above includes the bed force.  Applying a
-	 * separate centered bed gradient here would double-count it and destroy
-	 * the lake-at-rest equilibrium. */
-	for ( i = 0; i < field->workCount; i++ ) {
-		int index = field->captureQueue[i];
-		{
-			const sailingRiverCell_t *cell = &field->cells[index];
-			sailingRiverWater_t *next = &field->scratch[index];
-			float speed;
-			float damping;
-
-			/* Separated from ordinary drying below purely so the diagnostic
-			 * counter means something: a dry cell is normal, a non-finite one
-			 * is a broken step. */
-			if ( Q_isnan( next->depth ) || Q_isnan( next->momentum[0] )
-				|| Q_isnan( next->momentum[1] ) ) {
-				next->depth = 0.0f;
-				VectorClear2( next->momentum );
-				resetCells++;
-				continue;
-			}
-			if ( next->depth <= 0.001f ) {
-				next->depth = 0.0f;
-				VectorClear2( next->momentum );
-				continue;
-			}
-			speed = sqrtf( VectorLengthSquared2( next->momentum ) )
-				/ next->depth;
-			damping = 1.0f / ( 1.0f + friction * speed * timeStep
-				/ Q_max( next->depth, 1.0f ) );
-			VectorScale2( next->momentum, damping, next->momentum );
-			speed = sqrtf( VectorLengthSquared2( next->momentum ) )
-				/ next->depth;
-			if ( speed > 4096.0f ) {
-				VectorScale2( next->momentum, 4096.0f / speed,
-					next->momentum );
-				clampedCells++;
-			}
-			depthChange += fabsf( next->depth - cell->depth );
-			depthTotal += next->depth;
-			wetCells++;
-		}
+	/* Fixed slice order, so the rounding does not depend on the machine. */
+	for ( i = 0; i < SAILING_RIVER_STEP_SLICES; i++ ) {
+		depthChange += totals[i].depthChange;
+		depthTotal += totals[i].depthTotal;
+		clampedCells += totals[i].clampedCells;
+		resetCells += totals[i].resetCells;
+		wetCells += totals[i].wetCells;
 	}
 
 	field->clampedCells = clampedCells;
@@ -1365,15 +1437,10 @@ qboolean BG_SailingRiverFieldStep( sailingRiverField_t *field,
 		field->volume = depthTotal * field->cellSize * field->cellSize;
 		field->volumeRate = ( field->volume - previousVolume ) / timeStep;
 	}
-	/* Commit water only after every face has read the previous state. */
-	for ( i = 0; i < field->workCount; ++i ) {
-		int index = field->captureQueue[i];
-		field->cells[index].depth = field->scratch[index].depth;
-		VectorCopy2( field->scratch[index].momentum, field->cells[index].momentum );
-	}
 	field->stepCount++;
 	field->simulationTime += timeStep;
-	field->workDirty = !field->workDense || wetCells < field->activeCount * 7 / 10;
+	field->workDirty = !field->workDense
+		|| wetCells < field->activeCount * 7 / 10;
 	return qtrue;
 }
 
