@@ -55,7 +55,10 @@
 
 #include "xywindow.h"
 #include "camwindow.h"
+#include "simlights.h"
 
+#include <algorithm>
+#include <string>
 
 
 #define DEBUG_RENDER 0
@@ -521,6 +524,190 @@ public:
 };
 
 GLSLSkyboxProgram g_skyboxGLSL;
+
+
+#ifndef GL_MAX_FRAGMENT_UNIFORM_COMPONENTS
+#define GL_MAX_FRAGMENT_UNIFORM_COMPONENTS 0x8B49
+#endif
+
+/// \brief Shades the textured camera pass with the map's light entities, the way
+/// q3map2 would light it. See simlights.h for what is and is not modelled.
+///
+/// Unlike the others this is created the first time it is asked for, not at
+/// realise time: it is off by default, and if the driver rejects it the answer
+/// is to say so and carry on with the ordinary lighting, not to stop the editor.
+class GLSLSimLightsProgram : public GLProgram
+{
+	static constexpr std::size_t c_lightsCap = 512; // what the setting allows; the driver usually allows less
+	static constexpr GLint c_uniformHeadroom = 64; // components the rest of the shader needs, and some slack
+
+	GLuint m_program = 0;
+	bool m_failed = false;
+	std::size_t m_maxLights = 0;
+	GLint u_view_inverse = -1;
+	GLint u_count = -1;
+	GLint u_ambient = -1;
+	GLint u_minlight = -1;
+	GLint u_lights = -1;
+
+	static bool readSource( const char* filename, std::string& out ){
+		if ( !file_exists( filename ) ) {
+			return false;
+		}
+		const std::size_t size = file_size( filename );
+		FileInputStream file( filename );
+		if ( file.failed() ) {
+			return false;
+		}
+		out.resize( size );
+		out.resize( file.read( reinterpret_cast<StreamBase::byte_type*>( out.data() ), size ) );
+		return true;
+	}
+
+	bool compile( GLuint program, const char* file, GLenum type ){
+		StringOutputStream filename( 256 );
+		std::string body;
+		if ( !readSource( filename( GlobalRadiant().getAppPath(), "gl/", file ), body ) ) {
+			globalErrorStream() << "Simulated lights: cannot read " << Quoted( filename.c_str() ) << '\n';
+			return false;
+		}
+
+		/* the array size has to be a compile-time constant, and depends on what the driver allows */
+		const std::string source = "#version 120\n#define SIMLIGHTS_MAX " + std::to_string( m_maxLights ) + "\n" + body;
+		const GLchar* string = source.c_str();
+		const GLint length = GLint( source.size() );
+
+		GLuint shader = gl().glCreateShader( type );
+		gl().glShaderSource( shader, 1, &string, &length );
+		gl().glCompileShader( shader );
+
+		GLint compiled = 0;
+		gl().glGetShaderiv( shader, GL_COMPILE_STATUS, &compiled );
+		if ( !compiled ) {
+			globalErrorStream() << "Simulated lights: " << file << " failed to compile\n";
+			printShaderLog( shader );
+		}
+		else {
+			gl().glAttachShader( program, shader );
+		}
+		gl().glDeleteShader( shader );
+		return compiled;
+	}
+
+	void fail(){
+		if ( m_program != 0 ) {
+			gl().glDeleteProgram( m_program );
+			m_program = 0;
+		}
+		m_failed = true;
+		globalErrorStream() << "Simulated lights are unavailable; the camera keeps its ordinary lighting.\n";
+	}
+
+	void create(){
+		GLint components = 0;
+		gl().glGetIntegerv( GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, &components );
+		m_maxLights = std::min<std::size_t>( c_lightsCap, std::size_t( std::max( components - c_uniformHeadroom, 0 ) ) / 16 );
+		if ( m_maxLights < 8 ) {
+			globalErrorStream() << "Simulated lights: the driver allows only " << components << " fragment uniform components\n";
+			fail();
+			return;
+		}
+		globalOutputStream() << "Simulated lights: this driver can shade with up to " << m_maxLights << " lights at once\n";
+
+		m_program = gl().glCreateProgram();
+		if ( !compile( m_program, "simlights_vp.glsl", GL_VERTEX_SHADER )
+		  || !compile( m_program, "simlights_fp.glsl", GL_FRAGMENT_SHADER ) ) {
+			fail();
+			return;
+		}
+
+		gl().glLinkProgram( m_program );
+		GLint linked = 0;
+		gl().glGetProgramiv( m_program, GL_LINK_STATUS, &linked );
+		if ( !linked ) {
+			globalErrorStream() << "Simulated lights: link failed\n";
+			printProgramLog( m_program );
+			fail();
+			return;
+		}
+
+		gl().glUseProgram( m_program );
+		gl().glUniform1i( gl().glGetUniformLocation( m_program, "u_diffusemap" ), 0 );
+		u_view_inverse = gl().glGetUniformLocation( m_program, "u_view_inverse" );
+		u_count = gl().glGetUniformLocation( m_program, "u_count" );
+		u_ambient = gl().glGetUniformLocation( m_program, "u_ambient" );
+		u_minlight = gl().glGetUniformLocation( m_program, "u_minlight" );
+		u_lights = gl().glGetUniformLocation( m_program, "u_lights" );
+		gl().glUseProgram( 0 );
+
+		GlobalOpenGL_debugAssertNoErrors();
+	}
+
+public:
+	/// \brief True if there is a program to shade with, creating it on first use.
+	bool available(){
+		if ( m_program == 0 && !m_failed ) {
+			create();
+		}
+		return m_program != 0;
+	}
+
+	void destroy(){
+		if ( m_program != 0 ) {
+			gl().glDeleteProgram( m_program );
+		}
+		m_program = 0;
+		m_failed = false; // a new context gets a fresh attempt
+	}
+
+	/// \brief Once per frame, before anything is drawn: pick the lights and hand them over.
+	void prepareFrame( const Matrix4& modelview, const Matrix4& projection, const Vector3& viewer ){
+		SimLightsFrame frame;
+		SimLights_collect( frame, modelview, projection, viewer,
+		                   std::min( m_maxLights, std::size_t( std::max( g_largemap_simLightsMax, 1 ) ) ) );
+
+		const Matrix4 viewInverse = matrix4_affine_inverse( modelview );
+
+		float packed[c_lightsCap * 16];
+		float* out = packed;
+		for ( const SimLight& l : frame.lights ) {
+			*out++ = l.origin.x(); *out++ = l.origin.y(); *out++ = l.origin.z(); *out++ = l.envelope;
+			*out++ = l.colour.x(); *out++ = l.colour.y(); *out++ = l.colour.z(); *out++ = l.photons;
+			*out++ = l.fade; *out++ = l.angleScale; *out++ = l.extraDist; *out++ = l.radiusByDist;
+			*out++ = l.direction.x(); *out++ = l.direction.y(); *out++ = l.direction.z(); *out++ = float( l.flags );
+		}
+
+		gl().glUseProgram( m_program );
+		gl().glUniformMatrix4fv( u_view_inverse, 1, GL_FALSE, reinterpret_cast<const float*>( &viewInverse ) );
+		gl().glUniform1i( u_count, GLint( frame.lights.size() ) );
+		gl().glUniform3f( u_ambient, frame.ambient.x(), frame.ambient.y(), frame.ambient.z() );
+		gl().glUniform3f( u_minlight, frame.minlight.x(), frame.minlight.y(), frame.minlight.z() );
+		if ( !frame.lights.empty() ) {
+			gl().glUniform4fv( u_lights, GLsizei( frame.lights.size() * 4 ), packed );
+		}
+		gl().glUseProgram( 0 );
+
+		GlobalOpenGL_debugAssertNoErrors();
+	}
+
+	void enable() override {
+		gl().glUseProgram( m_program );
+		GlobalOpenGL_debugAssertNoErrors();
+		debug_string( "enable simlights" );
+	}
+
+	void disable() override {
+		gl().glUseProgram( 0 );
+		GlobalOpenGL_debugAssertNoErrors();
+		debug_string( "disable simlights" );
+	}
+
+	void setParameters( const Vector3& viewer, const Matrix4& localToWorld, const Vector3& origin, const Vector3& colour, const Matrix4& world2light ) override {
+		/* nothing per object: the object transform arrives in gl_ModelViewMatrix */
+	}
+};
+
+GLSLSimLightsProgram g_simLightsGLSL;
 
 
 
@@ -1005,6 +1192,15 @@ public:
 
 		ASSERT_MESSAGE( realised(), "render states are not realised" );
 
+		if ( globalstate & RENDER_SIMLIGHTS ) {
+			if ( g_simLightsGLSL.available() ) {
+				g_simLightsGLSL.prepareFrame( modelview, projection, viewer );
+			}
+			else{
+				globalstate &= ~RENDER_SIMLIGHTS; // could not be built: draw as usual
+			}
+		}
+
 		// global settings that are not set in renderstates
 		gl().glFrontFace( GL_CW );
 		gl().glCullFace( GL_BACK );
@@ -1128,8 +1324,10 @@ public:
 				g_bumpGLSL.destroy();
 				g_depthFillGLSL.destroy();
 			}
-			if( GlobalOpenGL().contextValid )
+			if( GlobalOpenGL().contextValid ){
 				g_skyboxGLSL.destroy();
+				g_simLightsGLSL.destroy();
+			}
 		}
 	}
 	bool realised(){
@@ -1374,6 +1572,16 @@ void OpenGLState_apply( const OpenGLState& self, OpenGLState& current, unsigned 
 	}
 
 	GLProgram* program = ( state & RENDER_PROGRAM ) != 0 ? self.m_program : 0;
+
+	/* Simulated lights take over the ordinary textured, lit fill states, the
+	   ones GL_LIGHT0 would otherwise shade. Anything with a program of its own
+	   (skybox, bump) or that opted out (sky) keeps what it has. */
+	if ( program == 0
+	  && ( globalstate & RENDER_SIMLIGHTS ) != 0
+	  && ( self.m_state & RENDER_UNLIT ) == 0
+	  && ( state & ( RENDER_FILL | RENDER_TEXTURE | RENDER_LIGHTING ) ) == ( RENDER_FILL | RENDER_TEXTURE | RENDER_LIGHTING ) ) {
+		program = &g_simLightsGLSL;
+	}
 
 	if ( program != current.m_program ) {
 		if ( current.m_program != 0 ) {
@@ -2123,6 +2331,9 @@ void OpenGLShader::construct( const char* name ){
 			else
 			{
 				state.m_state |= RENDER_CULLFACE;
+			}
+			if ( ( m_shader->getFlags() & QER_SKY ) != 0 ) {
+				state.m_state |= RENDER_UNLIT; // q3map2 does not light the sky either
 			}
 			if ( ( m_shader->getFlags() & QER_ALPHATEST ) != 0 ) {
 				state.m_state |= RENDER_ALPHATEST;

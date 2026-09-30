@@ -1008,6 +1008,9 @@ void create_view_menu( QMenuBar *menubar, MainFrame::EViewStyle style ){
 		create_check_menu_item_with_mnemonic( submenu, "Show Entity &Angles", "ShowAngles" );
 		create_check_menu_item_with_mnemonic( submenu, "Show Entity &Names", "ShowNames" );
 		create_check_menu_item_with_mnemonic( submenu, "Show Light Radiuses", "ShowLightRadiuses" );
+		if ( !string_equal( g_pGameDescription->mGameType.c_str(), "doom3" ) ) {
+			create_check_menu_item_with_mnemonic( submenu, "Simulated Map Lights", "ToggleSimLights" );
+		}
 		create_check_menu_item_with_mnemonic( submenu, "Show Entity Boxes", "ShowBboxes" );
 		create_check_menu_item_with_mnemonic( submenu, "Show Entity Connections", "ShowConnections" );
 

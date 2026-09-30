@@ -109,6 +109,14 @@ extern bool g_largemap_cullGrid;
  */
 extern bool g_largemap_tjGrid;
 
+/*! \brief How many lights the simulated-lights view shades with at most.
+
+    Every pixel loops over these, so it is a cost dial: the nearest lights that
+    reach the view are kept and the rest are dropped. Not latched - it is read each
+    frame - and further limited by how many the GPU has uniform space for.
+ */
+extern int g_largemap_simLightsMax;
+
 void LargeMap_Construct();
 
 /// \brief Prints which options the running session is actually using.

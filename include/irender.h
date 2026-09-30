@@ -52,6 +52,8 @@ const unsigned int RENDER_PROGRAM        = 1 << 18;
 const unsigned int RENDER_SCREEN         = 1 << 19;
 const unsigned int RENDER_TEXT           = 1 << 20; // override: globalstate |= RENDER_TEXTURE | RENDER_BLEND | RENDER_FILL
 const unsigned int RENDER_OVERRIDE       = 1 << 21; // override: globalstate |= RENDER_FILL
+const unsigned int RENDER_SIMLIGHTS      = 1 << 22; // global: shade textured, lit states with the simulated q3map2 lights instead of GL_LIGHT0
+const unsigned int RENDER_UNLIT          = 1 << 23; // state: opts out of RENDER_SIMLIGHTS (sky), and keeps its usual look
 typedef unsigned int RenderStateFlags;
 
 

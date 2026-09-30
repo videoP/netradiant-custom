@@ -26,6 +26,9 @@ LatchedBool g_largemap_lazyComponents( false, "Vertex editing data on demand" );
 bool g_largemap_cullGrid = false;
 bool g_largemap_tjGrid = false;
 
+/* not latched either: read every frame by the simulated lights */
+int g_largemap_simLightsMax = 128;
+
 
 void LargeMap_constructPreferences( PreferencesPage& page ){
 	page.appendCheckBox(
@@ -169,6 +172,18 @@ void LargeMap_constructPreferences( PreferencesPage& page ){
 	    "setting of the editor, and an older q3map2 will ignore it with a warning."
 	);
 
+	page.appendSpinner(
+	    "Simulated lights: most lights per frame", g_largemap_simLightsMax, 8, 512
+	)->setToolTip(
+	    "How many lights the Simulated Map Lights view shades with.\n\n"
+	    "Every pixel of the textured view loops over these lights, so this is what\n"
+	    "the view costs. Lights that cannot reach what you are looking at are left\n"
+	    "out first, then the ones furthest from the camera - so a busy map can show\n"
+	    "a distant light missing when this is too low.\n\n"
+	    "Takes effect immediately. The graphics driver sets a ceiling, usually a\n"
+	    "little over 200; asking for more than it allows uses the ceiling."
+	);
+
 	/* To read the effect of these: View / Show Stats. */
 }
 
@@ -231,6 +246,11 @@ void LargeMap_Construct(){
 	    "LargeMapTJGrid",
 	    BoolImportStringCaller( g_largemap_tjGrid ),
 	    BoolExportStringCaller( g_largemap_tjGrid )
+	);
+	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapSimLightsMax",
+	    IntImportStringCaller( g_largemap_simLightsMax ),
+	    IntExportStringCaller( g_largemap_simLightsMax )
 	);
 
 	/* The tokeniser lives in libs/ and cannot see this header, so the latched

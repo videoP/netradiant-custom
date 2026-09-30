@@ -55,6 +55,7 @@
 #include "xywindow.h"
 #include "windowobservers.h"
 #include "renderstate.h"
+#include "simlights.h"
 
 #include "timer.h"
 
@@ -1943,6 +1944,23 @@ void ShowSize3dToggle(){
 	}
 }
 
+camera_draw_mode CamWnd_GetMode();
+void CamWnd_SetMode( camera_draw_mode mode );
+
+ToggleItem g_simlights_item{ BoolExportCaller( g_simLights_enabled ) };
+void SimLightsToggle(){
+	g_simLights_enabled ^= 1;
+	g_simlights_item.update();
+	/* it is a shading of the textured view: with nothing textured on screen the
+	   button would appear to do nothing */
+	if ( g_simLights_enabled && ( CamWnd_GetMode() == cd_wire || CamWnd_GetMode() == cd_solid ) ) {
+		CamWnd_SetMode( cd_texture );
+	}
+	if ( g_camwnd != 0 ) {
+		CamWnd_Update( *g_camwnd );
+	}
+}
+
 void CamWnd::Cam_Draw(){
 //		globalOutputStream() << "Cam_Draw()\n";
 
@@ -2029,6 +2047,9 @@ void CamWnd::Cam_Draw(){
 		            | RENDER_SMOOTH
 		            | RENDER_SCALED
 		            | RENDER_PROGRAM;
+		if ( g_simLights_enabled ) {
+			globalstate |= RENDER_SIMLIGHTS;
+		}
 		break;
 	case cd_lighting:
 		globalstate |= RENDER_FILL
@@ -2293,6 +2314,9 @@ void Camera_ToggleFarClip(){
 
 void CamWnd_constructToolbar( QToolBar* toolbar ){
 	toolbar_append_toggle_button( toolbar, "Cubic clip the camera view", "view_cubicclipping.png", "ToggleCubicClip" );
+	if ( g_pGameDescription->mGameType != "doom3" ) {
+		toolbar_append_toggle_button( toolbar, "Simulated map lights (q3map2 preview of the light entities, no shadows)", "view_simlights.png", "ToggleSimLights" );
+	}
 }
 
 void CamWnd_registerShortcuts(){
@@ -2575,10 +2599,12 @@ void CamWnd_Construct(){
 	GlobalToggles_insert( "ShowStats", makeCallbackF( ShowStatsToggle ), ToggleItem::AddCallbackCaller( g_show_stats ) );
 	GlobalToggles_insert( "ShowWorkzone3d", makeCallbackF( ShowWorkzone3dToggle ), ToggleItem::AddCallbackCaller( g_show_workzone3d ) );
 	GlobalToggles_insert( "ShowSize3d", makeCallbackF( ShowSize3dToggle ), ToggleItem::AddCallbackCaller( g_show_size3d ) );
+	GlobalToggles_insert( "ToggleSimLights", makeCallbackF( SimLightsToggle ), ToggleItem::AddCallbackCaller( g_simlights_item ) );
 
 	GlobalPreferenceSystem().registerPreference( "ShowStats", BoolImportStringCaller( g_camwindow_globals.m_showStats ), BoolExportStringCaller( g_camwindow_globals.m_showStats ) );
 	GlobalPreferenceSystem().registerPreference( "ShowWorkzone3d", BoolImportStringCaller( g_camwindow_globals_private.m_bShowWorkzone ), BoolExportStringCaller( g_camwindow_globals_private.m_bShowWorkzone ) );
 	GlobalPreferenceSystem().registerPreference( "ShowSize3d", BoolImportStringCaller( g_camwindow_globals_private.m_bShowSize ), BoolExportStringCaller( g_camwindow_globals_private.m_bShowSize ) );
+	GlobalPreferenceSystem().registerPreference( "SimulatedMapLights", BoolImportStringCaller( g_simLights_enabled ), BoolExportStringCaller( g_simLights_enabled ) );
 	GlobalPreferenceSystem().registerPreference( "CamMoveSpeed", IntImportStringCaller( g_camwindow_globals_private.m_nMoveSpeed ), IntExportStringCaller( g_camwindow_globals_private.m_nMoveSpeed ) );
 	GlobalPreferenceSystem().registerPreference( "CamMoveTimeToMaxSpeed", IntImportStringCaller( g_camwindow_globals_private.m_time_toMaxSpeed ), IntExportStringCaller( g_camwindow_globals_private.m_time_toMaxSpeed ) );
 	GlobalPreferenceSystem().registerPreference( "ScrollMoveSpeed", IntImportStringCaller( g_camwindow_globals_private.m_nScrollMoveSpeed ), IntExportStringCaller( g_camwindow_globals_private.m_nScrollMoveSpeed ) );
