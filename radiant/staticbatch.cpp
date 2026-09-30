@@ -250,6 +250,7 @@ void Chunk::soil(){
     has to draw itself. */
 inline bool brush_batchable( BrushInstance& instance ){
 	return !instance.isSelected()
+	    && !instance.isSelectedComponents()
 	    && !instance.parentSelected()
 	    && instance.path().top().get().visible();
 }

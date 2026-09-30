@@ -3573,6 +3573,7 @@ public:
 	void selectedChangedComponent( const Selectable& selectable ){
 		GlobalSelectionSystem().getObserver ( SelectionSystem::eComponent )( selectable );
 		GlobalSelectionSystem().onComponentSelection( *this, selectable );
+		StaticBatch_brushChanged( *this ); // component highlights are drawn by the brush, not its batch
 	}
 	typedef MemberCaller<BrushInstance, void(const Selectable&), &BrushInstance::selectedChangedComponent> SelectedChangedComponentCaller;
 
