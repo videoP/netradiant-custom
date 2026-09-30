@@ -21,5 +21,20 @@
 
 #pragma once
 
+#include "math/matrix.h"
+#include "math/vector.h"
+
 void ShaderCache_setBumpEnabled( bool enabled );
 void ShaderCache_extensionsInitialised();
+
+/*! \brief Picks this frame's simulated lights, and draws the shadow maps they need.
+
+    Call first thing in the camera's draw, before anything is walked into the
+    render states: the shadow maps are drawn through those same states.
+    False if the simulated lights cannot run on this driver, in which case the
+    camera should draw as usual and leave RENDER_SIMLIGHTS off.
+ */
+bool SimLights_prepare( const Matrix4& modelview, const Matrix4& projection, const Vector3& viewer, const Vector3& viewDir, int width, int height );
+
+/// \brief One line for View / Show Stats: how many lights this frame used, of how many reached the view.
+const char* SimLights_getStats();

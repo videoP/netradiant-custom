@@ -56,6 +56,7 @@
 #include "xywindow.h"
 #include "camwindow.h"
 #include "simlights.h"
+#include "simshadows.h"
 
 #include <algorithm>
 #include <string>
@@ -529,26 +530,119 @@ GLSLSkyboxProgram g_skyboxGLSL;
 #ifndef GL_MAX_FRAGMENT_UNIFORM_COMPONENTS
 #define GL_MAX_FRAGMENT_UNIFORM_COMPONENTS 0x8B49
 #endif
+#ifndef GL_MAX_TEXTURE_IMAGE_UNITS
+#define GL_MAX_TEXTURE_IMAGE_UNITS 0x8872
+#endif
+#ifndef GL_TEXTURE_CUBE_MAP
+#define GL_TEXTURE_CUBE_MAP 0x8513
+#endif
+#ifndef GL_RGBA32F
+#define GL_RGBA32F 0x8814
+#endif
+#ifndef GL_RG32F
+#define GL_RG32F 0x8230
+#endif
+#ifndef GL_R32F
+#define GL_R32F 0x822E
+#endif
+#ifndef GL_RG
+#define GL_RG 0x8227
+#endif
+#ifndef GL_RED
+#define GL_RED 0x1903
+#endif
 
-/// \brief Shades the textured camera pass with the map's light entities, the way
-/// q3map2 would light it. See simlights.h for what is and is not modelled.
+/// \brief A float texture holding a flat array, c_simClusterTexW texels to a row, that grows as needed.
+class SimDataTexture
+{
+	GLuint m_texture = 0;
+	int m_rows = 0;
+	GLint m_internal = 0;
+	GLenum m_format = 0;
+	int m_channels = 0;
+	std::vector<float> m_stage;
+public:
+	SimDataTexture( GLint internal, GLenum format, int channels ) : m_internal( internal ), m_format( format ), m_channels( channels ){
+	}
+
+	GLuint id() const {
+		return m_texture;
+	}
+	/// Height of the texture, which the shader needs to turn a texel number into coordinates.
+	int rows() const {
+		return m_rows;
+	}
+
+	/// Puts \p texels texels of \p data in, from the first.
+	void upload( const std::vector<float>& data, std::size_t texels ){
+		const int needed = int( std::max<std::size_t>( ( texels + c_simClusterTexW - 1 ) / c_simClusterTexW, 1 ) );
+		if ( m_texture == 0 ) {
+			gl().glGenTextures( 1, &m_texture );
+		}
+		gl().glBindTexture( GL_TEXTURE_2D, m_texture );
+		if ( needed > m_rows ) {
+			m_rows = std::max( needed, m_rows * 2 );
+			gl().glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+			gl().glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+			gl().glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+			gl().glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+			gl().glTexImage2D( GL_TEXTURE_2D, 0, m_internal, c_simClusterTexW, m_rows, 0, m_format, GL_FLOAT, nullptr );
+		}
+		const std::size_t used = std::size_t( needed ) * c_simClusterTexW * m_channels;
+		m_stage.assign( used, 0.f );
+		std::copy_n( data.begin(), std::min( data.size(), used ), m_stage.begin() );
+		gl().glTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, c_simClusterTexW, needed, m_format, GL_FLOAT, m_stage.data() );
+		gl().glBindTexture( GL_TEXTURE_2D, 0 );
+	}
+
+	void destroy(){
+		if ( m_texture != 0 ) {
+			gl().glDeleteTextures( 1, &m_texture );
+		}
+		m_texture = 0;
+		m_rows = 0;
+	}
+};
+
+/// \brief Shades the textured camera pass with the map's lights, the way q3map2
+/// would light it. See simlights.h for what is and is not modelled.
+///
+/// Every light in view is used: they go in a texture, sorted into a grid of screen
+/// clusters (SimClusters) that another texture points into, and each pixel loops
+/// over only its own cluster's lights.
 ///
 /// Unlike the others this is created the first time it is asked for, not at
 /// realise time: it is off by default, and if the driver rejects it the answer
 /// is to say so and carry on with the ordinary lighting, not to stop the editor.
 class GLSLSimLightsProgram : public GLProgram
 {
-	static constexpr std::size_t c_lightsCap = 512; // what the setting allows; the driver usually allows less
-	static constexpr GLint c_uniformHeadroom = 64; // components the rest of the shader needs, and some slack
+	/* Data textures, then shadow maps, live on texture units well clear of the 0..7 the render states use */
+	static constexpr GLint c_dataFirstUnit = 8;   // lights, clusters, light lists
+	static constexpr GLint c_shadowFirstUnit = 11;
 
 	GLuint m_program = 0;
 	bool m_failed = false;
-	std::size_t m_maxLights = 0;
+	std::size_t m_shadowCubes = 0;   ///< cube samplers in the shader; the driver's texture units decide
+	bool m_sunShadow = false;        ///< a 2D sampler for the sun's map
 	GLint u_view_inverse = -1;
-	GLint u_count = -1;
 	GLint u_ambient = -1;
 	GLint u_minlight = -1;
-	GLint u_lights = -1;
+	GLint u_data_rows = -1;
+	GLint u_cluster_grid = -1;
+	GLint u_cluster_depth = -1;
+	GLint u_shadow_pos = -1;
+	GLint u_shadow_texel = -1;
+	GLint u_sun_on = -1;
+	GLint u_sun_dir = -1;
+	GLint u_sun_light = -1;
+	GLint u_sun_shadow_on = -1;
+	GLint u_sun_matrix = -1;
+	GLint u_sun_params = -1;
+
+	SimDataTexture m_lightTexture{ GL_RGBA32F, GL_RGBA, 4 };
+	SimDataTexture m_clusterTexture{ GL_RG32F, GL_RG, 2 };
+	SimDataTexture m_indexTexture{ GL_R32F, GL_RED, 1 };
+	SimClusters m_clusters;
 
 	static bool readSource( const char* filename, std::string& out ){
 		if ( !file_exists( filename ) ) {
@@ -572,8 +666,13 @@ class GLSLSimLightsProgram : public GLProgram
 			return false;
 		}
 
-		/* the array size has to be a compile-time constant, and depends on what the driver allows */
-		const std::string source = "#version 120\n#define SIMLIGHTS_MAX " + std::to_string( m_maxLights ) + "\n" + body;
+		/* the array sizes have to be compile-time constants, and depend on what the driver allows */
+		const std::string source = "#version 120\n#define SIMLIGHTS_CLUSTER_MAX " + std::to_string( c_simClusterMax )
+		                         + "\n#define SIMLIGHTS_TEX_W " + std::to_string( c_simClusterTexW ) + ".0"
+		                         + "\n#define SIMSHADOW_CUBES " + std::to_string( m_shadowCubes )
+		                         + "\n#define SIMSHADOW_SUN " + ( m_sunShadow ? "1" : "0" )
+		                         + "\n#define SIMSHADOW_NEAR " + std::to_string( c_simShadowNear )
+		                         + "\n" + body;
 		const GLchar* string = source.c_str();
 		const GLint length = GLint( source.size() );
 
@@ -604,15 +703,18 @@ class GLSLSimLightsProgram : public GLProgram
 	}
 
 	void create(){
-		GLint components = 0;
-		gl().glGetIntegerv( GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, &components );
-		m_maxLights = std::min<std::size_t>( c_lightsCap, std::size_t( std::max( components - c_uniformHeadroom, 0 ) ) / 16 );
-		if ( m_maxLights < 8 ) {
-			globalErrorStream() << "Simulated lights: the driver allows only " << components << " fragment uniform components\n";
+		GLint units = 0;
+		gl().glGetIntegerv( GL_MAX_TEXTURE_IMAGE_UNITS, &units );
+		const GLint spare = std::max( units - c_shadowFirstUnit, 0 );
+		if ( units < c_shadowFirstUnit ) {
+			globalErrorStream() << "Simulated lights: the driver has only " << units << " texture units\n";
 			fail();
 			return;
 		}
-		globalOutputStream() << "Simulated lights: this driver can shade with up to " << m_maxLights << " lights at once\n";
+		m_shadowCubes = std::min<std::size_t>( c_simShadowCubesMax, std::size_t( spare ) );
+		m_sunShadow = spare > GLint( m_shadowCubes );
+
+		globalOutputStream() << "Simulated lights: " << m_shadowCubes << " shadow cubes" << ( m_sunShadow ? " and a sun shadow map\n" : "\n" );
 
 		m_program = gl().glCreateProgram();
 		if ( !compile( m_program, "simlights_vp.glsl", GL_VERTEX_SHADER )
@@ -632,18 +734,43 @@ class GLSLSimLightsProgram : public GLProgram
 		}
 
 		gl().glUseProgram( m_program );
-		gl().glUniform1i( gl().glGetUniformLocation( m_program, "u_diffusemap" ), 0 );
-		u_view_inverse = gl().glGetUniformLocation( m_program, "u_view_inverse" );
-		u_count = gl().glGetUniformLocation( m_program, "u_count" );
-		u_ambient = gl().glGetUniformLocation( m_program, "u_ambient" );
-		u_minlight = gl().glGetUniformLocation( m_program, "u_minlight" );
-		u_lights = gl().glGetUniformLocation( m_program, "u_lights" );
+		const auto location = [this]( const char* name ){
+			return gl().glGetUniformLocation( m_program, name );
+		};
+		gl().glUniform1i( location( "u_diffusemap" ), 0 );
+		gl().glUniform1i( location( "u_light_tex" ), c_dataFirstUnit + 0 );
+		gl().glUniform1i( location( "u_cluster_tex" ), c_dataFirstUnit + 1 );
+		gl().glUniform1i( location( "u_index_tex" ), c_dataFirstUnit + 2 );
+		u_view_inverse = location( "u_view_inverse" );
+		u_ambient = location( "u_ambient" );
+		u_minlight = location( "u_minlight" );
+		u_data_rows = location( "u_data_rows" );
+		u_cluster_grid = location( "u_cluster_grid" );
+		u_cluster_depth = location( "u_cluster_depth" );
+		u_shadow_pos = location( "u_shadow_pos" );
+		u_shadow_texel = location( "u_shadow_texel" );
+		u_sun_on = location( "u_sun_on" );
+		u_sun_dir = location( "u_sun_dir" );
+		u_sun_light = location( "u_sun_light" );
+		u_sun_shadow_on = location( "u_sun_shadow_on" );
+		u_sun_matrix = location( "u_sun_matrix" );
+		u_sun_params = location( "u_sun_params" );
+		for ( std::size_t i = 0; i < m_shadowCubes; ++i ) {
+			gl().glUniform1i( location( ( "u_shadowmap" + std::to_string( i ) ).c_str() ), c_shadowFirstUnit + GLint( i ) );
+		}
+		if ( m_sunShadow ) {
+			gl().glUniform1i( location( "u_sun_map" ), c_shadowFirstUnit + GLint( m_shadowCubes ) );
+		}
 		gl().glUseProgram( 0 );
 
 		GlobalOpenGL_debugAssertNoErrors();
 	}
 
 public:
+	const SimClusters& clusters() const {
+		return m_clusters;
+	}
+
 	/// \brief True if there is a program to shade with, creating it on first use.
 	bool available(){
 		if ( m_program == 0 && !m_failed ) {
@@ -657,35 +784,78 @@ public:
 			gl().glDeleteProgram( m_program );
 		}
 		m_program = 0;
+		m_lightTexture.destroy();
+		m_clusterTexture.destroy();
+		m_indexTexture.destroy();
 		m_failed = false; // a new context gets a fresh attempt
 	}
 
-	/// \brief Once per frame, before anything is drawn: pick the lights and hand them over.
-	void prepareFrame( const Matrix4& modelview, const Matrix4& projection, const Vector3& viewer ){
-		SimLightsFrame frame;
-		SimLights_collect( frame, modelview, projection, viewer,
-		                   std::min( m_maxLights, std::size_t( std::max( g_largemap_simLightsMax, 1 ) ) ) );
+	/// \brief Once per frame, before anything is walked: pick the lights, draw the shadow maps they need, and sort them into clusters.
+	void collect( SimLightsFrame& frame, const Matrix4& modelview, const Matrix4& projection, const Vector3& viewer, const Vector3& viewDir, int width, int height ){
+		SimLights_collect( frame, modelview, projection, viewer, std::size_t( std::clamp( g_largemap_simLightsMax, 64, 16384 ) ) );
+		if ( m_shadowCubes != 0 || m_sunShadow ) {
+			SimShadows_frame( frame, viewer, viewDir );
+		}
+		SimLights_buildClusters( m_clusters, frame, modelview, projection, width, height );
+	}
 
+	/// \brief Hands the collected frame to the shader.
+	void upload( const SimLightsFrame& frame, const Matrix4& modelview ){
 		const Matrix4 viewInverse = matrix4_affine_inverse( modelview );
 
-		float packed[c_lightsCap * 16];
-		float* out = packed;
-		for ( const SimLight& l : frame.lights ) {
-			*out++ = l.origin.x(); *out++ = l.origin.y(); *out++ = l.origin.z(); *out++ = l.envelope;
-			*out++ = l.colour.x(); *out++ = l.colour.y(); *out++ = l.colour.z(); *out++ = l.photons;
-			*out++ = l.fade; *out++ = l.angleScale; *out++ = l.extraDist; *out++ = l.radiusByDist;
-			*out++ = l.direction.x(); *out++ = l.direction.y(); *out++ = l.direction.z(); *out++ = float( l.flags );
+		m_lightTexture.upload( m_clusters.lightTexels, m_clusters.lightCount * c_simLightTexels );
+		m_clusterTexture.upload( m_clusters.clusterTexels, m_clusters.clusterTexels.size() / 2 );
+		m_indexTexture.upload( m_clusters.indexTexels, m_clusters.indexCount );
+
+		float shadowPos[c_simShadowCubesMax * 4] = {};
+		for ( std::size_t i = 0; i < frame.cubeCount && i < m_shadowCubes; ++i ) {
+			shadowPos[i * 4 + 0] = frame.cubes[i].origin.x();
+			shadowPos[i * 4 + 1] = frame.cubes[i].origin.y();
+			shadowPos[i * 4 + 2] = frame.cubes[i].origin.z();
+			shadowPos[i * 4 + 3] = frame.cubes[i].farPlane;
 		}
 
 		gl().glUseProgram( m_program );
 		gl().glUniformMatrix4fv( u_view_inverse, 1, GL_FALSE, reinterpret_cast<const float*>( &viewInverse ) );
-		gl().glUniform1i( u_count, GLint( frame.lights.size() ) );
 		gl().glUniform3f( u_ambient, frame.ambient.x(), frame.ambient.y(), frame.ambient.z() );
 		gl().glUniform3f( u_minlight, frame.minlight.x(), frame.minlight.y(), frame.minlight.z() );
-		if ( !frame.lights.empty() ) {
-			gl().glUniform4fv( u_lights, GLsizei( frame.lights.size() * 4 ), packed );
+		gl().glUniform3f( u_data_rows, float( m_lightTexture.rows() ), float( m_clusterTexture.rows() ), float( m_indexTexture.rows() ) );
+		gl().glUniform4f( u_cluster_grid, float( m_clusters.tilesX ), float( m_clusters.tilesY ), float( m_clusters.slices ), float( m_clusters.tilePx ) );
+		gl().glUniform2f( u_cluster_depth, m_clusters.zNear, m_clusters.depthScale );
+		if ( m_shadowCubes != 0 ) {
+			gl().glUniform4fv( u_shadow_pos, GLsizei( m_shadowCubes ), shadowPos );
+			gl().glUniform1f( u_shadow_texel, frame.cubeSize != 0 ? 2.f / float( frame.cubeSize ) : 0.f );
+		}
+
+		const bool sun = frame.sun.present;
+		gl().glUniform1i( u_sun_on, sun ? 1 : 0 );
+		if ( sun ) {
+			const Vector3 light = frame.sun.colour * frame.sun.photons;
+			gl().glUniform3f( u_sun_dir, frame.sun.direction.x(), frame.sun.direction.y(), frame.sun.direction.z() );
+			gl().glUniform3f( u_sun_light, light.x(), light.y(), light.z() );
+			gl().glUniform1i( u_sun_shadow_on, ( m_sunShadow && frame.sunShadowed ) ? 1 : 0 );
+			if ( m_sunShadow && frame.sunShadowed ) {
+				gl().glUniformMatrix4fv( u_sun_matrix, 1, GL_FALSE, reinterpret_cast<const float*>( &frame.sunMatrix ) );
+				gl().glUniform4f( u_sun_params, frame.sunTexel, frame.sunRange, 1.f / 2048.f, 0.f );
+			}
 		}
 		gl().glUseProgram( 0 );
+
+		/* the data and the shadow maps, on units clear of anything a render state binds */
+		const GLuint data[3] = { m_lightTexture.id(), m_clusterTexture.id(), m_indexTexture.id() };
+		for ( GLint i = 0; i < 3; ++i ) {
+			gl().glActiveTexture( GL_TEXTURE0 + c_dataFirstUnit + i );
+			gl().glBindTexture( GL_TEXTURE_2D, data[i] );
+		}
+		for ( std::size_t i = 0; i < m_shadowCubes; ++i ) {
+			gl().glActiveTexture( GL_TEXTURE0 + c_shadowFirstUnit + GLint( i ) );
+			gl().glBindTexture( GL_TEXTURE_CUBE_MAP, i < frame.cubeCount ? frame.cubes[i].texture : 0 );
+		}
+		if ( m_sunShadow ) {
+			gl().glActiveTexture( GL_TEXTURE0 + c_shadowFirstUnit + GLint( m_shadowCubes ) );
+			gl().glBindTexture( GL_TEXTURE_2D, frame.sunShadowed ? frame.sunTexture : 0 );
+		}
+		gl().glActiveTexture( GL_TEXTURE0 );
 
 		GlobalOpenGL_debugAssertNoErrors();
 	}
@@ -708,6 +878,36 @@ public:
 };
 
 GLSLSimLightsProgram g_simLightsGLSL;
+SimLightsFrame g_simLightsFrame;
+int g_simLightsPrepareMsec = 0; ///< last SimLights_prepare, shadow maps and all
+
+const char* SimLights_getStats(){
+	static StringOutputStream stats( 256 );
+	const SimLightsFrame& frame = g_simLightsFrame;
+	std::size_t shadowed = 0;
+	for ( const SimLight& l : frame.lights ) {
+		shadowed += l.shadowSlot >= 0;
+	}
+	stats( "lights: ", Unsigned( frame.lights.size() ), " of ", Unsigned( frame.inView ), " in view, ",
+	       Unsigned( frame.total ), " in map | shadowed: ", Unsigned( shadowed ), frame.sunShadowed ? " + sun" : "" );
+	const std::size_t overflow = g_simLightsGLSL.clusters().overflow;
+	if ( overflow != 0 ) {
+		stats << " | cluster list overflow: " << Unsigned( overflow );
+	}
+	stats << " | prepare: " << g_simLightsPrepareMsec << " ms";
+	return stats.c_str();
+}
+
+bool SimLights_prepare( const Matrix4& modelview, const Matrix4& projection, const Vector3& viewer, const Vector3& viewDir, int width, int height ){
+	if ( !g_simLightsGLSL.available() ) {
+		return false;
+	}
+	Timer timer;
+	timer.start();
+	g_simLightsGLSL.collect( g_simLightsFrame, modelview, projection, viewer, viewDir, width, height );
+	g_simLightsPrepareMsec = timer.elapsed_msec();
+	return true;
+}
 
 
 
@@ -1194,7 +1394,7 @@ public:
 
 		if ( globalstate & RENDER_SIMLIGHTS ) {
 			if ( g_simLightsGLSL.available() ) {
-				g_simLightsGLSL.prepareFrame( modelview, projection, viewer );
+				g_simLightsGLSL.upload( g_simLightsFrame, modelview ); // collected by SimLights_prepare, before the walk
 			}
 			else{
 				globalstate &= ~RENDER_SIMLIGHTS; // could not be built: draw as usual
@@ -1204,7 +1404,16 @@ public:
 		// global settings that are not set in renderstates
 		gl().glFrontFace( GL_CW );
 		gl().glCullFace( GL_BACK );
-		gl().glPolygonOffset( -1, 1 );
+		if ( globalstate & RENDER_SHADOWPASS ) {
+			/* A shadow map's own bias, against acne: what is drawn is only ever read
+			   back as a depth, so pushing it away from the light costs nothing visible. */
+			gl().glPolygonOffset( 2, 4 );
+			gl().glEnable( GL_POLYGON_OFFSET_FILL );
+			gl().glColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+		}
+		else{
+			gl().glPolygonOffset( -1, 1 );
+		}
 		{
 			const GLubyte pattern[132] = {
 				0xAA, 0xAA, 0xAA, 0xAA, 0x55, 0x55, 0x55, 0x55,
@@ -1294,6 +1503,12 @@ public:
 		reset.m_state = current.m_state & ~RENDER_TEXT; /* popmatrix after RENDER_TEXT */
 		reset.m_program = nullptr; /* disable shader */
 		OpenGLState_apply( reset, current, globalstate );
+
+		if ( globalstate & RENDER_SHADOWPASS ) {
+			gl().glDisable( GL_POLYGON_OFFSET_FILL );
+			gl().glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+			gl().glPolygonOffset( -1, 1 );
+		}
 	}
 	void realise() override {
 		if ( --m_unrealised == 0 ) {
@@ -1327,6 +1542,7 @@ public:
 			if( GlobalOpenGL().contextValid ){
 				g_skyboxGLSL.destroy();
 				g_simLightsGLSL.destroy();
+				SimShadows_release();
 			}
 		}
 	}
@@ -1936,6 +2152,21 @@ void Renderables_flush( OpenGLStateBucket::Renderables& renderables, OpenGLState
 }
 
 void OpenGLStateBucket::render( OpenGLState& current, unsigned int globalstate, const Vector3& viewer ){
+	if ( ( globalstate & RENDER_SHADOWPASS ) != 0 ) {
+		/* Only what q3map2 would trace against: opaque, textured, filled. Sky, water and
+		   fog, clips, selection overlays and entity boxes all fail one of those, and the
+		   skybox and bump states have programs of their own. The renderables still go,
+		   or the camera's walk would find them here. */
+		constexpr unsigned int c_casts = RENDER_FILL | RENDER_TEXTURE;
+		constexpr unsigned int c_notCasts = RENDER_BLEND | RENDER_UNLIT;
+		if ( ( m_state.m_state & ( c_casts | c_notCasts ) ) != c_casts
+		  || m_state.m_program != nullptr
+		  || m_state.m_textureSkyBox != 0 ) {
+			m_renderables.clear();
+			return;
+		}
+	}
+
 	if ( ( globalstate & m_state.m_state & RENDER_SCREEN ) != 0 ) {
 		OpenGLState_apply( m_state, current, globalstate );
 		debug_colour( "screen fill" );

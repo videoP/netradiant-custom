@@ -3,6 +3,7 @@
  */
 
 #include "largemap.h"
+#include "simlights.h" // c_simShadowCubesMax
 
 #include "stringio.h"
 #include "preferencesystem.h"
@@ -27,7 +28,11 @@ bool g_largemap_cullGrid = false;
 bool g_largemap_tjGrid = false;
 
 /* not latched either: read every frame by the simulated lights */
-int g_largemap_simLightsMax = 128;
+int g_largemap_simLightsMax = 4096;
+bool g_largemap_simSurfaceLights = true;
+int g_largemap_simShadowLights = 4;
+int g_largemap_simShadowSize = 512;
+int g_largemap_simSunShadowRange = 4096;
 
 
 void LargeMap_constructPreferences( PreferencesPage& page ){
@@ -173,15 +178,60 @@ void LargeMap_constructPreferences( PreferencesPage& page ){
 	);
 
 	page.appendSpinner(
-	    "Simulated lights: most lights per frame", g_largemap_simLightsMax, 8, 512
+	    "Simulated lights: most lights in view", g_largemap_simLightsMax, 64, 16384
 	)->setToolTip(
-	    "How many lights the Simulated Map Lights view shades with.\n\n"
-	    "Every pixel of the textured view loops over these lights, so this is what\n"
-	    "the view costs. Lights that cannot reach what you are looking at are left\n"
-	    "out first, then the ones furthest from the camera - so a busy map can show\n"
-	    "a distant light missing when this is too low.\n\n"
-	    "Takes effect immediately. The graphics driver sets a ceiling, usually a\n"
-	    "little over 200; asking for more than it allows uses the ceiling."
+	    "A ceiling on how many lights the Simulated Map Lights view considers at\n"
+	    "once. Light entities and surface lights (a lit face is several) that can\n"
+	    "reach what is on screen are all used, up to this, so the picture does not\n"
+	    "change with the way you are facing. Each pixel only reads the lights that\n"
+	    "reach its own patch of the view, so this is not what the view costs; how\n"
+	    "many overlap is.\n\n"
+	    "Past the ceiling the lights furthest from the camera are left out, so a\n"
+	    "map with more emitters in view than this can show a distant one missing.\n\n"
+	    "Takes effect immediately."
+	);
+
+	page.appendCheckBox(
+	    "View", "Simulated lights: surface lights (q3map_surfacelight)",
+	    g_largemap_simSurfaceLights
+	)->setToolTip(
+	    "Lets faces whose shader has q3map_surfacelight light the Simulated Map\n"
+	    "Lights view, as q3map2 does: each such face is split into triangles and\n"
+	    "every triangle lights its surroundings by how much of the sky it covers, as\n"
+	    "seen from the lit point (q3map2's exact point-to-polygon form factor), plus\n"
+	    "its 5% backsplash. Brush faces only for now; patches and models are not lit\n"
+	    "from.\n\n"
+	    "They share the light limit above, and a big emitter is many lights. The\n"
+	    "faces are gathered again whenever the map changes, which on a very large\n"
+	    "map costs a moment after each edit."
+	);
+
+	page.appendSpinner(
+	    "Simulated light shadows: lights with shadows", g_largemap_simShadowLights, 1, int( c_simShadowCubesMax )
+	)->setToolTip(
+	    "How many of the nearest lights cast shadows when Simulated Light Shadows\n"
+	    "is on. Each gets a cube shadow map: six views of the map, drawn from the\n"
+	    "light, redrawn only when the map changes (one light per frame, so an edit\n"
+	    "next to a lit room settles over a few frames).\n\n"
+	    "Lights past this number still light the view, but shine through walls.\n"
+	    "Takes effect immediately."
+	);
+	page.appendSpinner(
+	    "Simulated light shadows: resolution", g_largemap_simShadowSize, 128, 2048
+	)->setToolTip(
+	    "Width in texels of each side of a light's shadow cube. Higher is sharper\n"
+	    "edges and less light leaking under thin walls, at four times the drawing\n"
+	    "and memory for each doubling. 512 is 6 MB per light.\n\n"
+	    "Takes effect immediately; the maps are redrawn."
+	);
+	page.appendSpinner(
+	    "Simulated light shadows: sun range", g_largemap_simSunShadowRange, 512, 32768
+	)->setToolTip(
+	    "The sun's shadow map follows the camera and covers this many units in each\n"
+	    "direction around it. The map is 2048 texels across, so shadow edges are\n"
+	    "range * 2 / 2048 units soft: 4096 is 4 units. Beyond it the sun is\n"
+	    "unshadowed.\n\n"
+	    "Takes effect immediately."
 	);
 
 	/* To read the effect of these: View / Show Stats. */
@@ -248,9 +298,29 @@ void LargeMap_Construct(){
 	    BoolExportStringCaller( g_largemap_tjGrid )
 	);
 	GlobalPreferenceSystem().registerPreference(
-	    "LargeMapSimLightsMax",
+	    "LargeMapSimLightsCap",
 	    IntImportStringCaller( g_largemap_simLightsMax ),
 	    IntExportStringCaller( g_largemap_simLightsMax )
+	);
+	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapSimSurfaceLights",
+	    BoolImportStringCaller( g_largemap_simSurfaceLights ),
+	    BoolExportStringCaller( g_largemap_simSurfaceLights )
+	);
+	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapSimShadowLights",
+	    IntImportStringCaller( g_largemap_simShadowLights ),
+	    IntExportStringCaller( g_largemap_simShadowLights )
+	);
+	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapSimShadowSize",
+	    IntImportStringCaller( g_largemap_simShadowSize ),
+	    IntExportStringCaller( g_largemap_simShadowSize )
+	);
+	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapSimSunShadowRange",
+	    IntImportStringCaller( g_largemap_simSunShadowRange ),
+	    IntExportStringCaller( g_largemap_simSunShadowRange )
 	);
 
 	/* The tokeniser lives in libs/ and cannot see this header, so the latched

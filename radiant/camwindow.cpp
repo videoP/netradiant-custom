@@ -56,12 +56,14 @@
 #include "windowobservers.h"
 #include "renderstate.h"
 #include "simlights.h"
+#include "simshadows.h"
 
 #include "timer.h"
 
 #include <QOpenGLWidget>
 
 #include <QApplication>
+#include <QTimer>
 
 // https://stackoverflow.com/questions/42566421/how-to-queue-lambda-function-into-qts-event-loop/42566867#42566867
 template <typename Fun> void postCall( QObject * obj, Fun && fun ) {
@@ -1710,6 +1712,8 @@ CamWnd::CamWnd() :
 
 	CamWnd_Add_Handlers_Move( *this );
 
+	/* before the redraw it queues, so a frame never draws with last edit's shadow maps thought current */
+	AddSceneChangeCallback( FreeCaller<void(), SimLights_sceneChanged>() );
 	AddSceneChangeCallback( ReferenceCaller<CamWnd, void(), CamWnd_Update>( *this ) );
 }
 
@@ -1948,12 +1952,11 @@ camera_draw_mode CamWnd_GetMode();
 void CamWnd_SetMode( camera_draw_mode mode );
 
 ToggleItem g_simlights_item{ BoolExportCaller( g_simLights_enabled ) };
-void SimLightsToggle(){
-	g_simLights_enabled ^= 1;
-	g_simlights_item.update();
-	/* it is a shading of the textured view: with nothing textured on screen the
-	   button would appear to do nothing */
-	if ( g_simLights_enabled && ( CamWnd_GetMode() == cd_wire || CamWnd_GetMode() == cd_solid ) ) {
+ToggleItem g_simshadows_item{ BoolExportCaller( g_simShadows_enabled ) };
+
+/// Both are a shading of the textured view: with nothing textured on screen a button would appear to do nothing.
+void SimLights_showTextured(){
+	if ( CamWnd_GetMode() == cd_wire || CamWnd_GetMode() == cd_solid ) {
 		CamWnd_SetMode( cd_texture );
 	}
 	if ( g_camwnd != 0 ) {
@@ -1961,7 +1964,41 @@ void SimLightsToggle(){
 	}
 }
 
+void SimLightsToggle(){
+	g_simLights_enabled ^= 1;
+	g_simlights_item.update();
+	if ( g_simLights_enabled ) {
+		SimLights_showTextured();
+	}
+	else if ( g_camwnd != 0 ) {
+		CamWnd_Update( *g_camwnd );
+	}
+}
+
+/// Shadows are a property of the simulated lights, so asking for them asks for the lights too.
+void SimShadowsToggle(){
+	g_simShadows_enabled ^= 1;
+	g_simshadows_item.update();
+	if ( g_simShadows_enabled && !g_simLights_enabled ) {
+		g_simLights_enabled = true;
+		g_simlights_item.update();
+	}
+	if ( g_simShadows_enabled ) {
+		SimLights_showTextured();
+	}
+	else if ( g_camwnd != 0 ) {
+		CamWnd_Update( *g_camwnd );
+	}
+}
+
 void CamWnd::Cam_Draw(){
+	/* The simulated lights come first: their shadow maps are drawn through the render
+	   states, which the walk below is about to fill, and they leave GL state for the
+	   camera to set up again as it does every frame. */
+	bool simLights = false;
+	if ( g_simLights_enabled && ( m_Camera.draw_mode == cd_texture || m_Camera.draw_mode == cd_texture_plus_wire ) ) {
+		simLights = SimLights_prepare( m_Camera.modelview, m_Camera.projection, m_view.getViewer(), m_view.getViewDir(), m_Camera.width, m_Camera.height );
+	}
 //		globalOutputStream() << "Cam_Draw()\n";
 
 	gl().glViewport( 0, 0, m_Camera.width, m_Camera.height );
@@ -2047,7 +2084,7 @@ void CamWnd::Cam_Draw(){
 		            | RENDER_SMOOTH
 		            | RENDER_SCALED
 		            | RENDER_PROGRAM;
-		if ( g_simLights_enabled ) {
+		if ( simLights ) {
 			globalstate |= RENDER_SIMLIGHTS;
 		}
 		break;
@@ -2153,6 +2190,7 @@ void CamWnd::Cam_Draw(){
 			m_fps_text,
 			Renderer_GetStats( m_render_time.elapsed_msec() ),
 			Cull_GetStats(),
+			simLights ? SimLights_getStats() : "",
 		};
 		m_render_time.start();
 
@@ -2169,6 +2207,16 @@ void CamWnd::Cam_Draw(){
 	// bind back to the default texture so that we don't have problems
 	// elsewhere using/modifying texture maps between contexts
 	gl().glBindTexture( GL_TEXTURE_2D, 0 );
+
+	/* Shadow maps are redrawn one a frame, and some are still behind. A redraw asked
+	   for while drawing is dropped, so ask from the event loop. */
+	if ( simLights && SimShadows_pending() ) {
+		QTimer::singleShot( 0, [this](){
+			if ( g_camwnd == this ) {
+				CamWnd_Update( *this );
+			}
+		} );
+	}
 }
 
 void CamWnd::draw(){
@@ -2315,7 +2363,8 @@ void Camera_ToggleFarClip(){
 void CamWnd_constructToolbar( QToolBar* toolbar ){
 	toolbar_append_toggle_button( toolbar, "Cubic clip the camera view", "view_cubicclipping.png", "ToggleCubicClip" );
 	if ( g_pGameDescription->mGameType != "doom3" ) {
-		toolbar_append_toggle_button( toolbar, "Simulated map lights (q3map2 preview of the light entities, no shadows)", "view_simlights.png", "ToggleSimLights" );
+		toolbar_append_toggle_button( toolbar, "Simulated map lights (q3map2 preview of light entities and q3map_surfacelight faces)", "view_simlights.png", "ToggleSimLights" );
+		toolbar_append_toggle_button( toolbar, "Shadows for the simulated map lights and q3map_sun (shadow maps: the nearest lights only)", "view_simshadows.png", "ToggleSimShadows" );
 	}
 }
 
@@ -2600,11 +2649,13 @@ void CamWnd_Construct(){
 	GlobalToggles_insert( "ShowWorkzone3d", makeCallbackF( ShowWorkzone3dToggle ), ToggleItem::AddCallbackCaller( g_show_workzone3d ) );
 	GlobalToggles_insert( "ShowSize3d", makeCallbackF( ShowSize3dToggle ), ToggleItem::AddCallbackCaller( g_show_size3d ) );
 	GlobalToggles_insert( "ToggleSimLights", makeCallbackF( SimLightsToggle ), ToggleItem::AddCallbackCaller( g_simlights_item ) );
+	GlobalToggles_insert( "ToggleSimShadows", makeCallbackF( SimShadowsToggle ), ToggleItem::AddCallbackCaller( g_simshadows_item ) );
 
 	GlobalPreferenceSystem().registerPreference( "ShowStats", BoolImportStringCaller( g_camwindow_globals.m_showStats ), BoolExportStringCaller( g_camwindow_globals.m_showStats ) );
 	GlobalPreferenceSystem().registerPreference( "ShowWorkzone3d", BoolImportStringCaller( g_camwindow_globals_private.m_bShowWorkzone ), BoolExportStringCaller( g_camwindow_globals_private.m_bShowWorkzone ) );
 	GlobalPreferenceSystem().registerPreference( "ShowSize3d", BoolImportStringCaller( g_camwindow_globals_private.m_bShowSize ), BoolExportStringCaller( g_camwindow_globals_private.m_bShowSize ) );
 	GlobalPreferenceSystem().registerPreference( "SimulatedMapLights", BoolImportStringCaller( g_simLights_enabled ), BoolExportStringCaller( g_simLights_enabled ) );
+	GlobalPreferenceSystem().registerPreference( "SimulatedMapLightShadows", BoolImportStringCaller( g_simShadows_enabled ), BoolExportStringCaller( g_simShadows_enabled ) );
 	GlobalPreferenceSystem().registerPreference( "CamMoveSpeed", IntImportStringCaller( g_camwindow_globals_private.m_nMoveSpeed ), IntExportStringCaller( g_camwindow_globals_private.m_nMoveSpeed ) );
 	GlobalPreferenceSystem().registerPreference( "CamMoveTimeToMaxSpeed", IntImportStringCaller( g_camwindow_globals_private.m_time_toMaxSpeed ), IntExportStringCaller( g_camwindow_globals_private.m_time_toMaxSpeed ) );
 	GlobalPreferenceSystem().registerPreference( "ScrollMoveSpeed", IntImportStringCaller( g_camwindow_globals_private.m_nScrollMoveSpeed ), IntExportStringCaller( g_camwindow_globals_private.m_nScrollMoveSpeed ) );

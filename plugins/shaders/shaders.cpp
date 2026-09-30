@@ -36,6 +36,7 @@
 
 #include "shaders.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -284,6 +285,8 @@ public:
 
 	int m_nFlags;
 	float m_fTrans;
+
+	ShaderLightInfo m_lightInfo;
 
 // alphafunc stuff
 	IShader::EAlphaFunc m_AlphaFunc;
@@ -1107,6 +1110,10 @@ public:
 		}
 		return 0;
 	}
+
+	const ShaderLightInfo& getLightInfo() const override {
+		return m_template.m_lightInfo;
+	}
 };
 
 bool CShader::m_lightingEnabled = false;
@@ -1229,6 +1236,51 @@ bool ShaderTemplate::parseQuake3( Tokeniser& tokeniser ){
 				m_nFlags |= QER_ALPHATEST;
 
 				RETURN_FALSE_IF_FAIL( Tokeniser_getFloat( tokeniser, m_AlphaRef ) );
+			}
+			/* q3map2 light keywords, for the simulated lights preview. Only the
+			   arguments are read here; radiant/simlights.cpp applies q3map2's scaling. */
+			else if ( string_equal_nocase( token, "q3map_surfacelight" ) ) {
+				RETURN_FALSE_IF_FAIL( Tokeniser_getFloat( tokeniser, m_lightInfo.surfaceLight ) );
+			}
+			else if ( string_equal_nocase( token, "q3map_lightsubdivide" ) ) {
+				float value;
+				RETURN_FALSE_IF_FAIL( Tokeniser_getFloat( tokeniser, value ) );
+				m_lightInfo.lightSubdivide = int( value );
+			}
+			else if ( string_equal_nocase( token, "q3map_lightrgb" ) ) {
+				for ( float& channel : m_lightInfo.lightRGB )
+				{
+					RETURN_FALSE_IF_FAIL( Tokeniser_getFloat( tokeniser, channel ) );
+				}
+				m_lightInfo.hasLightRGB = true;
+			}
+			else if ( string_equal_nocase( token, "q3map_backsplash" ) ) {
+				float percent, distance;
+				RETURN_FALSE_IF_FAIL( Tokeniser_getFloat( tokeniser, percent ) );
+				RETURN_FALSE_IF_FAIL( Tokeniser_getFloat( tokeniser, distance ) );
+				m_lightInfo.backsplashFraction = percent * 0.01f;
+				m_lightInfo.backsplashDistance = distance;
+			}
+			else if ( string_equal_nocase( token, "q3map_sun" )
+			       || string_equal_nocase( token, "q3map_sunext" )
+			       || string_equal_nocase( token, "sun" ) ) {
+				float colour[3], intensity, degrees, elevation;
+				for ( float& channel : colour )
+				{
+					RETURN_FALSE_IF_FAIL( Tokeniser_getFloat( tokeniser, channel ) );
+				}
+				RETURN_FALSE_IF_FAIL( Tokeniser_getFloat( tokeniser, intensity ) );
+				RETURN_FALSE_IF_FAIL( Tokeniser_getFloat( tokeniser, degrees ) );
+				RETURN_FALSE_IF_FAIL( Tokeniser_getFloat( tokeniser, elevation ) );
+				if ( !m_lightInfo.hasSun ) { // q3map2 makes a light per directive; the preview keeps the first
+					m_lightInfo.hasSun = true;
+					std::copy( std::begin( colour ), std::end( colour ), m_lightInfo.sunColour );
+					m_lightInfo.sunIntensity = intensity;
+					m_lightInfo.sunDegrees = degrees;
+					m_lightInfo.sunElevation = elevation;
+				}
+				/* q3map2 makes any shader with a sun a sky */
+				m_nFlags |= QER_SKY;
 			}
 			else if ( string_equal_nocase( token, "skyparms" ) ) {
 				const char* sky = tokeniser.getToken();

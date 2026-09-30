@@ -75,6 +75,24 @@ public:
 
 typedef Callback<void(const ShaderLayer&)> ShaderLayerCallback;
 
+/// \brief What a shader says to q3map2's light stage, as far as the editor's
+/// simulated lights (radiant/simlights.h) need it. Values are the raw keyword
+/// arguments; the simulation applies q3map2's own scaling and defaults.
+struct ShaderLightInfo
+{
+	float surfaceLight = 0;     ///< q3map_surfacelight; 0 = the surface emits nothing
+	int lightSubdivide = 0;     ///< q3map_lightSubdivide; 0 = q3map2's default
+	bool hasLightRGB = false;   ///< q3map_lightRGB given; otherwise the texture's average colour is used
+	float lightRGB[3] = { 0, 0, 0 };
+	float backsplashFraction = -1; ///< q3map_backsplash percent / 100; negative = q3map2's default
+	float backsplashDistance = -1;
+	bool hasSun = false;        ///< q3map_sun / q3map_sunExt, first one only
+	float sunColour[3] = { 1, 1, 1 };
+	float sunIntensity = 0;
+	float sunDegrees = 0;       ///< azimuth, 0 = east, 90 = north
+	float sunElevation = 0;     ///< 0 = horizon, 90 = zenith
+};
+
 
 class IShader
 {
@@ -125,6 +143,9 @@ public:
 	virtual void forEachLayer( const ShaderLayerCallback& layer ) const = 0;
 
 	virtual qtexture_t* lightFalloffImage() const = 0;
+
+	/// \brief q3map2 light keywords of the shader (surface lights, suns).
+	virtual const ShaderLightInfo& getLightInfo() const = 0;
 };
 
 typedef Callback<void(const char*)> ShaderNameCallback;

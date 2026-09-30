@@ -10,11 +10,13 @@ uniform mat4 u_view_inverse; // camera modelview, inverted: eye space -> world
 
 varying vec3 var_world_pos;
 varying vec3 var_world_normal;
+varying float var_eye_z; // distance in front of the camera, for the fragment stage's light cluster
 
 void main()
 {
 	vec4 eye = gl_ModelViewMatrix * gl_Vertex;
 
+	var_eye_z = -eye.z;
 	var_world_pos = ( u_view_inverse * eye ).xyz;
 	// gl_NormalMatrix undoes the object's scale, the inverse view undoes the camera
 	var_world_normal = mat3( u_view_inverse ) * ( gl_NormalMatrix * gl_Normal );

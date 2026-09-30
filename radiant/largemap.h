@@ -109,13 +109,21 @@ extern bool g_largemap_cullGrid;
  */
 extern bool g_largemap_tjGrid;
 
-/*! \brief How many lights the simulated-lights view shades with at most.
+/*! \brief Most lights the simulated-lights view considers at once.
 
-    Every pixel loops over these, so it is a cost dial: the nearest lights that
-    reach the view are kept and the rest are dropped. Not latched - it is read each
-    frame - and further limited by how many the GPU has uniform space for.
+    Every light that reaches the view is used up to this; past it the ones
+    furthest from the camera are dropped. Not latched - it is read each frame.
  */
 extern int g_largemap_simLightsMax;
+
+/// \brief Whether q3map_surfacelight faces light the simulated-lights view. Not latched.
+extern bool g_largemap_simSurfaceLights;
+/// \brief How many of the nearest lights get a shadow cube. Not latched.
+extern int g_largemap_simShadowLights;
+/// \brief Edge of a shadow cube face in texels. Not latched.
+extern int g_largemap_simShadowSize;
+/// \brief World units the sun's shadow map covers each side of the camera. Not latched.
+extern int g_largemap_simSunShadowRange;
 
 void LargeMap_Construct();
 

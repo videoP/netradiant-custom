@@ -958,6 +958,7 @@ $(INSTALLDIR)/radiant.$(EXE): \
 	radiant/staticbatch.o \
 	radiant/server.o \
 	radiant/simlights.o \
+	radiant/simshadows.o \
 	radiant/sockets.o \
 	radiant/stacktrace.o \
 	radiant/surfacedialog.o \
