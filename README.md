@@ -1,4 +1,32 @@
-This variant is focused on large .map support and water/terrain features.
+This build adds large-map performance tools, simulated lighting preview, transluscent-aware lighting and river baking.
+
+## Features
+
+- Defer Entity List population
+- Fast map parsing
+- Shared shader names
+- Pooled face allocation
+- Vertex editing data on demand
+- Cached container bounds
+- Spacial index for view culling
+- Batched static geometry
+- Simulated map lights
+- Enhanced stats overlay
+- Q3Map2 Gridded CullSides (-cullgrid)
+- Q3Map2 Gridded FixTJunctions (-tjgrid)
+- Q3Map2 Water light absorption (shader q3map_lightAbsorptionDistance or global _waterAbsorptionDistance)
+- Q3Map2 River bed precompute (-riverbed)
+- Q3Map2 Steady-state river bake (-river)
+
+## Reported overall performance
+
+On a 1 GB map with **972,961 brushes**:
+
+- Load time: **29.2s → 18.4s**
+- Memory use: **14,558 MB → 13,510 MB**
+- Editor Frame rate: **5 FPS → about 200 FPS**
+
+=================
 
 NetRadiant-custom
 =================
