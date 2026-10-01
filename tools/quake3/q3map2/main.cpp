@@ -209,6 +209,11 @@ int main( int argc, char **argv ){
 		r = RiverMain( args );
 	}
 
+	/* editor: a compiled bsp's lit surfaces, for the light snapshot view */
+	else if ( args.takeFront( "-lightsnapbsp" ) ) {
+		r = LightSnapBSPMain( args );
+	}
+
 	/* ydnar: lightmap export */
 	else if ( args.takeFront( "-export" ) ) {
 		r = ExportLightmapsMain( args );

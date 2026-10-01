@@ -22,6 +22,7 @@
 #pragma once
 
 #include "iscenegraph.h"
+#include <unordered_set>
 #include "generic/callback.h"
 #include "signal/signalfwd.h"
 #include "string/stringfwd.h"
@@ -107,6 +108,8 @@ void Map_Free();
 void Map_RegionOff();
 
 bool Map_SaveRegion( const char* filename );
+/// rief Saves only \p nodes, leaving the editor's region and selection alone. For the light snapshot.
+bool Map_SaveNodes( const char* filename, const std::unordered_set<scene::Node*>& nodes );
 
 void Map_ImportSelected( class TextInputStream& in, const MapFormat& format );
 void Map_ExportSelected( class TextOutputStream& out, const MapFormat& format );

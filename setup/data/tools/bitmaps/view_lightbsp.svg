@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg width="128" height="128" viewBox="0 0 128 128" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <path style="fill:#c0c0c0;stroke:none" d="M 6,6 h 34 v 10 H 16 v 24 H 6 Z M 88,6 h 34 v 34 h -10 V 16 H 88 Z M 6,88 h 10 v 24 h 24 v 10 H 6 Z M 112,88 h 10 v 34 H 88 v -10 h 24 z" />
+  <!-- a sheet of lightmap texels with an arrow into it -->
+  <g style="fill:#c0c0c0;stroke:none">
+    <path d="M 34,30 h 60 v 12 H 34 Z" />
+    <path d="M 34,48 h 28 v 12 H 34 Z M 68,48 h 26 v 12 H 68 Z" style="fill-opacity:0.55" />
+    <path d="M 56,72 h 16 v 14 h 14 L 64,112 42,86 h 14 Z" />
+  </g>
+</svg>

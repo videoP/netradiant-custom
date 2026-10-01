@@ -585,6 +585,7 @@ $(INSTALLDIR)/q3map2.$(EXE): \
 	tools/quake3/q3map2/light_bounce.o \
 	tools/quake3/q3map2/lightmaps_ydnar.o \
 	tools/quake3/q3map2/light.o \
+	tools/quake3/q3map2/light_snapshot.o \
 	tools/quake3/q3map2/light_trace.o \
 	tools/quake3/q3map2/light_ydnar.o \
 	tools/quake3/q3map2/main.o \
@@ -919,6 +920,7 @@ $(INSTALLDIR)/radiant.$(EXE): \
 	radiant/help.o \
 	radiant/image.o \
 	radiant/largemap.o \
+	radiant/lightsnapshot.o \
 	radiant/layerswindow.o \
 	radiant/mainframe.o \
 	radiant/main.o \

@@ -57,6 +57,7 @@
 #include "camwindow.h"
 #include "simlights.h"
 #include "simshadows.h"
+#include "lightsnapshot.h"
 
 #include <algorithm>
 #include <string>
@@ -1529,6 +1530,7 @@ public:
 	}
 	void unrealise() override {
 		if ( ++m_unrealised == 1 ) {
+			LightSnap_unrealise();
 			for ( auto& shader : m_shaders )
 			{
 				if ( !shader.value.empty() ) {
@@ -1543,6 +1545,7 @@ public:
 				g_skyboxGLSL.destroy();
 				g_simLightsGLSL.destroy();
 				SimShadows_release();
+				LightSnap_release();
 			}
 		}
 	}

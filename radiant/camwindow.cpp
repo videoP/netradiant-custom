@@ -56,6 +56,7 @@
 #include "windowobservers.h"
 #include "renderstate.h"
 #include "simlights.h"
+#include "lightsnapshot.h"
 #include "simshadows.h"
 
 #include "timer.h"
@@ -1954,6 +1955,9 @@ void CamWnd_SetMode( camera_draw_mode mode );
 ToggleItem g_simlights_item{ BoolExportCaller( g_simLights_enabled ) };
 ToggleItem g_simshadows_item{ BoolExportCaller( g_simShadows_enabled ) };
 
+bool g_lightSnap_enabled = false;
+ToggleItem g_lightsnap_item{ BoolExportCaller( g_lightSnap_enabled ) };
+
 /// Both are a shading of the textured view: with nothing textured on screen a button would appear to do nothing.
 void SimLights_showTextured(){
 	if ( CamWnd_GetMode() == cd_wire || CamWnd_GetMode() == cd_solid ) {
@@ -1964,9 +1968,12 @@ void SimLights_showTextured(){
 	}
 }
 
+/// One button for the light preview: the lights and their shadows come and go together. The menu can still take the shadows off alone.
 void SimLightsToggle(){
 	g_simLights_enabled ^= 1;
+	g_simShadows_enabled = g_simLights_enabled;
 	g_simlights_item.update();
+	g_simshadows_item.update();
 	if ( g_simLights_enabled ) {
 		SimLights_showTextured();
 	}
@@ -1987,6 +1994,51 @@ void SimShadowsToggle(){
 		SimLights_showTextured();
 	}
 	else if ( g_camwnd != 0 ) {
+		CamWnd_Update( *g_camwnd );
+	}
+}
+
+/// A snapshot lights what is textured on screen, around where the camera is when the button goes down.
+void LightSnapToggle(){
+	g_lightSnap_enabled ^= 1;
+	g_lightsnap_item.update();
+	if ( g_lightSnap_enabled && g_camwnd != 0 ) {
+		SimLights_showTextured();
+		LightSnap_start( Camera_getOrigin( *g_camwnd ), [](){
+			if ( g_camwnd != 0 ) {
+				CamWnd_Update( *g_camwnd );
+			}
+		}, CamWnd_getWidget( *g_camwnd ), [](){
+			if ( g_lightSnap_enabled ) {
+				LightSnapToggle(); // the same as the toolbar button
+			}
+		} );
+	}
+	else {
+		LightSnap_stop();
+		if ( g_camwnd != 0 ) {
+			CamWnd_Update( *g_camwnd );
+		}
+	}
+}
+
+/// Shows the lighting a compiled .bsp holds, in the snapshot's place: it turns the snapshot on, and the same button turns it off.
+void LightLoadBSP(){
+	if ( g_camwnd == 0 ) {
+		return;
+	}
+	SimLights_showTextured();
+	if ( LightSnap_startBSP( [](){
+		if ( g_camwnd != 0 ) {
+			CamWnd_Update( *g_camwnd );
+		}
+	}, CamWnd_getWidget( *g_camwnd ), [](){
+		if ( g_lightSnap_enabled ) {
+			LightSnapToggle();
+		}
+	} ) ) {
+		g_lightSnap_enabled = true;
+		g_lightsnap_item.update();
 		CamWnd_Update( *g_camwnd );
 	}
 }
@@ -2131,6 +2183,10 @@ void CamWnd::Cam_Draw(){
 		}
 	}
 
+	if ( g_lightSnap_enabled && ( m_Camera.draw_mode == cd_texture || m_Camera.draw_mode == cd_texture_plus_wire ) ) {
+		LightSnap_draw( m_Camera.modelview, m_Camera.projection );
+	}
+
 	// prepare for 2d stuff
 	gl().glColor4f( 1, 1, 1, 1 );
 	gl().glDisable( GL_BLEND );
@@ -2148,6 +2204,33 @@ void CamWnd::Cam_Draw(){
 	gl().glDisableClientState( GL_TEXTURE_COORD_ARRAY );
 	gl().glDisableClientState( GL_NORMAL_ARRAY );
 	gl().glDisableClientState( GL_COLOR_ARRAY );
+
+	/* The overlay is plain fixed-function white over black. The scene pass, and the
+	   light preview's shaders and shadow maps, leave state behind that would turn it
+	   black (a program still bound, fog, a colour mask, texturing on a spare unit),
+	   so put all of it back rather than trust what the last bucket left. */
+	gl().glUseProgram( 0 );
+	gl().glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+	gl().glPolygonMode( GL_FRONT_AND_BACK, GL_FILL );
+	for ( GLenum unit = GL_TEXTURE7; unit >= GL_TEXTURE0; --unit )
+	{
+		gl().glActiveTexture( unit );
+		gl().glDisable( GL_TEXTURE_2D );
+		gl().glDisable( GL_TEXTURE_CUBE_MAP );
+		gl().glBindTexture( GL_TEXTURE_2D, 0 );
+	}
+	gl().glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
+	gl().glDisable( GL_FOG );
+	gl().glDisable( GL_ALPHA_TEST );
+	gl().glDisable( GL_CULL_FACE );
+	gl().glDisable( GL_LINE_STIPPLE );
+	gl().glDisable( GL_POLYGON_STIPPLE );
+	gl().glDisable( GL_POLYGON_OFFSET_FILL );
+	gl().glDisable( GL_POLYGON_OFFSET_LINE );
+	gl().glDisable( GL_NORMALIZE );
+	gl().glDisable( GL_RESCALE_NORMAL );
+	gl().glShadeModel( GL_FLAT );
+	gl().glColor4f( 1, 1, 1, 1 );
 
 	gl().glDisable( GL_TEXTURE_2D );
 	gl().glDisable( GL_LIGHTING );
@@ -2175,6 +2258,14 @@ void CamWnd::Cam_Draw(){
 			gl().glVertexPointer( 2, GL_FLOAT, sizeof( *verts ), verts->data() );
 			gl().glDrawArrays( GL_LINES, 0, std::size( verts ) );
 		}
+	}
+
+	if ( g_lightSnap_enabled && LightSnap_status()[0] != '\0' ) {
+		const float lineHeight = GlobalOpenGL().m_font->getPixelHeight();
+		FrameStats_drawStringOutline( 1.0f, lineHeight, LightSnap_status() );
+		gl().glColor3f( 1, 1, 1 );
+		gl().glRasterPos3f( 1.0f, lineHeight, 0.0f );
+		GlobalOpenGL().drawString( LightSnap_status() );
 	}
 
 	if ( g_camwindow_globals.m_showStats ) {
@@ -2363,8 +2454,9 @@ void Camera_ToggleFarClip(){
 void CamWnd_constructToolbar( QToolBar* toolbar ){
 	toolbar_append_toggle_button( toolbar, "Cubic clip the camera view", "view_cubicclipping.png", "ToggleCubicClip" );
 	if ( g_pGameDescription->mGameType != "doom3" ) {
-		toolbar_append_toggle_button( toolbar, "Simulated map lights (q3map2 preview of light entities and q3map_surfacelight faces)", "view_simlights.png", "ToggleSimLights" );
-		toolbar_append_toggle_button( toolbar, "Shadows for the simulated map lights and q3map_sun (shadow maps: the nearest lights only)", "view_simshadows.png", "ToggleSimShadows" );
+		toolbar_append_toggle_button( toolbar, "Light preview: simulated map lights (light entities, q3map_surfacelight faces, q3map_sun) with shadows from the nearest lights", "view_simlights.png", "ToggleSimLights" );
+		toolbar_append_toggle_button( toolbar, "Light snapshot: q3map2 lights the map around the camera, bounce included, and each pass is shown as it finishes", "view_lightsnap.png", "ToggleLightSnap" );
+			toolbar_append_button( toolbar, "Load a compiled BSP's lighting (its lightmaps and vertex lighting) into the camera view; the snapshot button above clears it", "view_lightbsp.png", "LoadBSPLighting" );
 	}
 }
 
@@ -2648,6 +2740,8 @@ void CamWnd_Construct(){
 	GlobalToggles_insert( "ShowStats", makeCallbackF( ShowStatsToggle ), ToggleItem::AddCallbackCaller( g_show_stats ) );
 	GlobalToggles_insert( "ShowWorkzone3d", makeCallbackF( ShowWorkzone3dToggle ), ToggleItem::AddCallbackCaller( g_show_workzone3d ) );
 	GlobalToggles_insert( "ShowSize3d", makeCallbackF( ShowSize3dToggle ), ToggleItem::AddCallbackCaller( g_show_size3d ) );
+	GlobalToggles_insert( "ToggleLightSnap", makeCallbackF( LightSnapToggle ), ToggleItem::AddCallbackCaller( g_lightsnap_item ) );
+	GlobalCommands_insert( "LoadBSPLighting", makeCallbackF( LightLoadBSP ) );
 	GlobalToggles_insert( "ToggleSimLights", makeCallbackF( SimLightsToggle ), ToggleItem::AddCallbackCaller( g_simlights_item ) );
 	GlobalToggles_insert( "ToggleSimShadows", makeCallbackF( SimShadowsToggle ), ToggleItem::AddCallbackCaller( g_simshadows_item ) );
 
@@ -2682,5 +2776,7 @@ void CamWnd_Construct(){
 	Camera_registerPreferencesPage();
 }
 void CamWnd_Destroy(){
+	/* its process, timer and shader references are statics: left to their destructors they run after Qt and the shader system are gone */
+	LightSnap_stop();
 	CamWnd_destroyStatic();
 }

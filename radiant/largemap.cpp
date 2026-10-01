@@ -4,6 +4,7 @@
 
 #include "largemap.h"
 #include "simlights.h" // c_simShadowCubesMax
+#include "lightsnapshot.h"
 
 #include "stringio.h"
 #include "preferencesystem.h"
@@ -234,6 +235,8 @@ void LargeMap_constructPreferences( PreferencesPage& page ){
 	    "Takes effect immediately."
 	);
 
+	LightSnap_constructPreferences( page );
+
 	/* To read the effect of these: View / Show Stats. */
 }
 
@@ -327,6 +330,8 @@ void LargeMap_Construct(){
 	   value is pushed to it once, here, after preferences have been read. */
 	g_scriptTokeniser_fastPath = g_largemap_fastParse.m_value;
 	g_brush_lazyComponents = g_largemap_lazyComponents.m_value;
+
+	LightSnap_registerPreferences();
 
 	LargeMap_registerPreferencesPage();
 }

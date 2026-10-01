@@ -2053,6 +2053,8 @@ static void LightWorld( bool fastAllocate, bool bounceStore ){
 		if( bounceStore ){
 			UnparseEntities();
 			WriteBSPFileAfterLight( source );
+			/* lit as far as the passes done so far: direct light first, then each bounce */
+			WriteLightSnapshot( lightSnapFile.c_str(), b - 1, false );
 		}
 
 		/* note it */
@@ -2077,6 +2079,7 @@ static void LightWorld( bool fastAllocate, bool bounceStore ){
 		if ( lights.empty() ) {
 			Sys_Printf( "No diffuse light to calculate, ending radiosity.\n" );
 			if( bounceStore ){ // already stored, just quit
+				WriteLightSnapshot( lightSnapFile.c_str(), b - 1, true );
 				return;
 			}
 			break; // break to StoreSurfaceLightmaps
@@ -2129,6 +2132,7 @@ static void LightWorld( bool fastAllocate, bool bounceStore ){
 	/* write out the bsp */
 	UnparseEntities();
 	WriteBSPFileAfterLight( source );
+	WriteLightSnapshot( lightSnapFile.c_str(), bt, true );
 }
 
 
@@ -2722,6 +2726,11 @@ int LightMain( Args& args ){
 		while ( args.takeArg( "-export" ) ) {
 			exportLightmaps = true;
 			Sys_Printf( "Exporting lightmaps\n" );
+		}
+
+		while ( args.takeArg( "-lightsnap" ) ) {
+			lightSnapFile = args.takeNext();
+			Sys_Printf( "Writing a lit-surface snapshot to %s after every pass\n", lightSnapFile.c_str() );
 		}
 
 		while ( args.takeArg( "-notrace" ) ) {

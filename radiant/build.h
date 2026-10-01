@@ -26,6 +26,10 @@
 
 void build_set_variable( const char* name, const char* value );
 
+/// rief A build command (like "[q3map2] -meta [MapFile]") with the build menu's tools and variables expanded,
+/// for a map that is not the open one. The build monitor is left out.
+CopiedString build_expand_command( const char* command, const char* mapFile, const char* bspFile );
+
 std::vector<CopiedString> build_construct_commands( size_t buildIdx );
 
 void DoBuildMenu();

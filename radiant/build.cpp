@@ -475,6 +475,18 @@ void build_init_tools(){
 	}
 }
 
+CopiedString build_expand_command( const char* command, const char* mapFile, const char* bspFile ){
+	build_init_variables();
+	build_set_variable( "MonitorAddress", "" ); // before the tools are expanded: q3map2 would -connect to it
+	build_init_tools();
+	build_set_variable( "MapFile", mapFile );
+	build_set_variable( "BspFile", bspFile );
+
+	const StringBuffer output = VariableString( command ).evaluate();
+	build_clear_variables();
+	return CopiedString( output.c_str() );
+}
+
 std::vector<CopiedString> build_construct_commands( size_t buildIdx ){
 	build_init_variables();
 	build_init_tools();

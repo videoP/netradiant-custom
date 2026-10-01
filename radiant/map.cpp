@@ -21,6 +21,8 @@
 
 #include "map.h"
 
+#include <unordered_set>
+
 #include "debugging/debugging.h"
 
 #include "imap.h"
@@ -1380,6 +1382,33 @@ public:
 bool Map_SaveRegion( const char *filename ){
 	ScopeRegionBrushes tmp;
 	return MapResource_saveFile( MapFormat_forFile( filename ), GlobalSceneGraph().root(), Map_Traverse_Region, filename );
+}
+
+namespace
+{
+const std::unordered_set<scene::Node*>* g_saveNodesSet;
+
+class NodeSetExcluder : public Excluder
+{
+public:
+	bool excluded( scene::Node& node ) const override {
+		return g_saveNodesSet->count( &node ) == 0;
+	}
+};
+
+void Map_Traverse_NodeSet( scene::Node& root, const scene::Traversable::Walker& walker ){
+	if ( scene::Traversable* traversable = Node_getTraversable( root ) ) {
+		traversable->traverse( ExcludeWalker( walker, NodeSetExcluder() ) );
+	}
+}
+}
+
+/// Saves just \p nodes (and whatever of the tree leads to them), without touching the scene's own region or selection state.
+bool Map_SaveNodes( const char *filename, const std::unordered_set<scene::Node*>& nodes ){
+	g_saveNodesSet = &nodes;
+	const bool saved = MapResource_saveFile( MapFormat_forFile( filename ), GlobalSceneGraph().root(), Map_Traverse_NodeSet, filename );
+	g_saveNodesSet = nullptr;
+	return saved;
 }
 
 
