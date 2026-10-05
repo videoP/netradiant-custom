@@ -31,6 +31,7 @@
 /* dependencies */
 #include "q3map2.h"
 #include "autopk3.h"
+#include "light_incremental.h"
 #include "timer.h"
 
 
@@ -80,6 +81,7 @@ int main( int argc, char **argv ){
 	std::set_new_handler( new_handler );
 
 	Args args( argc, argv );
+	LightCacheSettings( args );
 
 	/* read general options first */
 	{

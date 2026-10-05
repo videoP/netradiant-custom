@@ -546,7 +546,7 @@ $(INSTALLDIR)/q3map2.$(EXE): LDFLAGS_EXTRA += -Wl,-rpath '-Wl,$$ORIGIN'
 endif
 endif
 $(INSTALLDIR)/q3map2.$(EXE): LIBS_EXTRA := $(LIBS_XML) $(LIBS_GLIB) $(LIBS_PNG) $(LIBS_JPEG) $(LIBS_ZLIB) $(LIBS_ASSIMP)
-$(INSTALLDIR)/q3map2.$(EXE): CPPFLAGS_EXTRA := $(CPPFLAGS_XML) $(CPPFLAGS_GLIB) $(CPPFLAGS_PNG) $(CPPFLAGS_JPEG) -Itools/quake3/common -Ilibs -Iinclude $(CPPFLAGS_ASSIMP)
+$(INSTALLDIR)/q3map2.$(EXE): CPPFLAGS_EXTRA := $(CPPFLAGS_XML) $(CPPFLAGS_GLIB) $(CPPFLAGS_PNG) $(CPPFLAGS_JPEG) $(CPPFLAGS_ZLIB) -Itools/quake3/common -Ilibs -Iinclude $(CPPFLAGS_ASSIMP)
 $(INSTALLDIR)/q3map2.$(EXE): \
 	tools/quake3/common/cmdlib.o \
 	tools/quake3/common/qimagelib.o \
@@ -586,6 +586,7 @@ $(INSTALLDIR)/q3map2.$(EXE): \
 	tools/quake3/q3map2/lightmaps_ydnar.o \
 	tools/quake3/q3map2/light.o \
 	tools/quake3/q3map2/light_snapshot.o \
+	tools/quake3/q3map2/light_incremental.o \
 	tools/quake3/q3map2/light_trace.o \
 	tools/quake3/q3map2/light_ydnar.o \
 	tools/quake3/q3map2/main.o \
@@ -877,7 +878,7 @@ libwebplib.$(A): \
 
 $(INSTALLDIR)/radiant.$(EXE): LDFLAGS_EXTRA := $(MWINDOWS)
 $(INSTALLDIR)/radiant.$(EXE): LIBS_EXTRA := $(LIBS_GL) $(LIBS_DL) $(LIBS_XML) $(LIBS_GLIB) $(LIBS_QTWIDGETS) $(LIBS_QTSVG) $(LIBS_ZLIB)
-$(INSTALLDIR)/radiant.$(EXE): CPPFLAGS_EXTRA := $(CPPFLAGS_GL) $(CPPFLAGS_DL) $(CPPFLAGS_XML) $(CPPFLAGS_GLIB) $(CPPFLAGS_QTWIDGETS) $(CPPFLAGS_QTSVG) -Ilibs -Iinclude
+$(INSTALLDIR)/radiant.$(EXE): CPPFLAGS_EXTRA := $(CPPFLAGS_GL) $(CPPFLAGS_DL) $(CPPFLAGS_XML) $(CPPFLAGS_GLIB) $(CPPFLAGS_QTWIDGETS) $(CPPFLAGS_QTSVG) $(CPPFLAGS_ZLIB) -Ilibs -Iinclude
 $(INSTALLDIR)/radiant.$(EXE): \
 	radiant/autosave.o \
 	radiant/brushmanip.o \

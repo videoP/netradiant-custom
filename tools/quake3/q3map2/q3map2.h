@@ -2151,6 +2151,7 @@ inline bool exportLightmaps;
 inline bool externalLightmaps;
 inline std::string lightSnapFile;         /* -lightsnap: lit surfaces for the editor's overlay, written after every pass */
 void WriteLightSnapshot( const char *path, int pass, bool final );
+std::vector<byte> CreateLightSnapshot( int pass, bool final );
 inline int lmCustomSizeW = LIGHTMAP_WIDTH;
 inline int lmCustomSizeH = LIGHTMAP_WIDTH;
 inline const char *       lmCustomDir;

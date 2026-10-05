@@ -5,6 +5,8 @@
 #include "lightsnapshot.h"
 
 #include "build.h"
+#include "bspwatch.h"
+#include "lightcachepreview.h"
 #include "igl.h"
 #include "ientity.h"
 #include "ishaders.h"
@@ -28,6 +30,8 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QSlider>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QDateTime>
 #include <QDir>
@@ -37,8 +41,10 @@
 #include <QStandardPaths>
 #include <QString>
 #include <QTimer>
+#include <QEvent>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -46,6 +52,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #ifndef GL_FOG_COORD_ARRAY
@@ -61,7 +68,8 @@ namespace
 int g_radius = 1536;
 CopiedString g_bspFlags = "";
 CopiedString g_lightFlags = "-fast -patchshadows -samples 2 -filter -bounce 8";
-int g_brightness = 1; // index into c_brightness
+int g_brightness = 0; // index into c_brightness; start with unscaled compiled lighting
+float g_previewGamma = 1.f; // display adjustment; never changes compiled lightmaps
 
 constexpr int c_brightness[] = { 1, 2, 4 }; // GL_RGB_SCALE takes only these
 const char* const c_brightnessNames[] = { "1x", "2x", "4x" };
@@ -284,12 +292,15 @@ struct Job
 	QString mapFile, bspFile, lsnFile, logFile;
 	std::unique_ptr<QProcess> process;
 	std::unique_ptr<QTimer> poll;
+	std::unique_ptr<BspFileWatch> bspWatch;
+	quint64 bspRevision = 0; ///< source revision being converted
 	QDateTime loadedTime;
 	qint64 loadedSize = -1;
 	bool running = false;
 	bool failed = false;
 	bool lightStage = false; ///< the -meta stage is over: the log now says how far the lighting is
 	bool fromBsp = false;    ///< not a snapshot of the map: a compiled bsp being read, see LightSnap_startBSP
+	bool fromCache = false;  ///< display payload is read directly from .lightcache
 	int bounces = 0;
 	QByteArray key; ///< what this snapshot is made from, see g_cachedKey
 };
@@ -304,7 +315,11 @@ std::shared_ptr<Pass> g_cached;
 QByteArray g_cachedKey;
 std::vector<IShader*> g_shaders;  // g_pass's, same order
 std::vector<unsigned> g_lightmapTextures;
+GLuint g_gammaProgram = 0;
+GLint g_gammaLightmappedUniform = -1;
+bool g_gammaProgramFailed = false;
 std::string g_status;
+std::function<void()> g_redraw;
 
 void release_shaders(){
 	for ( IShader* shader : g_shaders ) {
@@ -376,6 +391,96 @@ public:
 };
 
 QPointer<Overlay> g_overlay;
+
+/// A live display adjustment for both snapshot and compiled lighting previews.
+class GammaOverlay : public QWidget
+{
+	QSlider* m_slider;
+	QLabel* m_value;
+	QComboBox* m_scale;
+public:
+	GammaOverlay( QWidget* parent ) : QWidget( parent ){
+		setObjectName( "lightGammaOverlay" );
+		setAttribute( Qt::WA_StyledBackground );
+		setStyleSheet( "#lightGammaOverlay { background: rgba(24, 24, 24, 220); border: 1px solid #707070; }"
+		               "#lightGammaOverlay QLabel { color: white; }" );
+		auto* name = new QLabel( "Preview gamma", this );
+		m_slider = new QSlider( Qt::Horizontal, this );
+		m_slider->setRange( 50, 300 );
+		m_slider->setSingleStep( 1 );
+		m_slider->setPageStep( 10 );
+		m_slider->setToolTip( "Display gamma: 1.00 shows the compiled colors. Higher values brighten the preview. This does not change the BSP." );
+		m_value = new QLabel( this );
+		m_value->setMinimumWidth( 36 );
+		auto* reset = new QPushButton( "Reset", this );
+		reset->setToolTip( "Reset lightmap scale to 1x and preview gamma to 1.00" );
+		reset->setFocusPolicy( Qt::NoFocus );
+		auto* layout = new QVBoxLayout( this );
+		layout->setContentsMargins( 8, 4, 8, 4 );
+		layout->setSpacing( 4 );
+		auto* scaleRow = new QHBoxLayout;
+		m_scale = new QComboBox( this );
+		for ( const char* label : c_brightnessNames ) m_scale->addItem( label );
+		m_scale->setFocusPolicy( Qt::NoFocus );
+		m_scale->setToolTip( "1x shows unscaled compiled lighting. 2x and 4x multiply the lighting for an overbright preview." );
+		scaleRow->addWidget( new QLabel( "Lightmap scale", this ) );
+		scaleRow->addWidget( m_scale );
+		scaleRow->addStretch();
+		layout->addLayout( scaleRow );
+		auto* row = new QHBoxLayout;
+		row->setSpacing( 6 );
+		row->addWidget( name );
+		row->addWidget( m_slider, 1 );
+		row->addWidget( m_value );
+		row->addWidget( reset );
+		layout->addLayout( row );
+		setFixedWidth( 340 );
+		sync();
+		QObject::connect( m_scale, QOverload<int>::of( &QComboBox::currentIndexChanged ), this, []( int index ){
+			g_brightness = std::clamp( index, 0, int( std::size( c_brightness ) ) - 1 );
+			if ( g_redraw ) g_redraw();
+		} );
+		QObject::connect( m_slider, &QSlider::valueChanged, this, [this]( int value ){
+			g_previewGamma = value / 100.f;
+			m_value->setText( QString::number( g_previewGamma, 'f', 2 ) );
+			if ( g_redraw ) g_redraw();
+		} );
+		QObject::connect( reset, &QPushButton::clicked, this, [this](){
+			m_scale->setCurrentIndex( 0 );
+			m_slider->setValue( 100 );
+		} );
+		parent->installEventFilter( this );
+		place();
+		hide();
+	}
+	void sync(){
+		const QSignalBlocker scaleBlocker( m_scale );
+		const QSignalBlocker gammaBlocker( m_slider );
+		m_scale->setCurrentIndex( std::clamp( g_brightness, 0, int( std::size( c_brightness ) ) - 1 ) );
+		m_slider->setValue( int( std::clamp( g_previewGamma, 0.5f, 3.f ) * 100.f + 0.5f ) );
+		m_value->setText( QString::number( m_slider->value() / 100.f, 'f', 2 ) );
+	}
+	bool eventFilter( QObject* watched, QEvent* event ) override {
+		if ( watched == parentWidget() && event->type() == QEvent::Resize ) place();
+		return QWidget::eventFilter( watched, event );
+	}
+	void place(){
+		if ( parentWidget() ) move( std::max( 8, parentWidget()->width() - width() - 8 ), 8 );
+	}
+};
+
+QPointer<GammaOverlay> g_gammaOverlay;
+
+void show_gamma_overlay( QWidget* parent ){
+	if ( g_gammaOverlay != nullptr && g_gammaOverlay->parentWidget() != parent ) delete g_gammaOverlay;
+	if ( g_gammaOverlay == nullptr && parent != nullptr ) g_gammaOverlay = new GammaOverlay( parent );
+	if ( g_gammaOverlay != nullptr ) {
+		g_gammaOverlay->sync();
+		g_gammaOverlay->place();
+		g_gammaOverlay->show();
+		g_gammaOverlay->raise();
+	}
+}
 
 /// What a stage of q3map2's -light is worth, as a share of its pass. The numbers are rough: they only have to keep the bar moving the right way.
 struct StageShare
@@ -502,15 +607,17 @@ void describe(){
 		return;
 	}
 	std::ostringstream text;
-	text << ( g_job->fromBsp ? "BSP lighting: " : "Light snapshot: " );
+	text << ( g_job->fromCache ? "Lighting cache: " : g_job->fromBsp ? "BSP lighting: " : "Light snapshot: " );
 	if ( g_job->failed ) {
-		text << "failed, see " << g_job->logFile.toStdString();
+		text << ( g_job->fromBsp && ( g_pass || g_incoming ) ? "refresh failed; keeping previous lighting, see " : "failed, see " )
+		     << g_job->logFile.toStdString();
+	}
+	else if ( g_job->fromBsp ) {
+		text << QFileInfo( g_job->mapFile ).fileName().toStdString()
+		     << ( g_job->running ? ", refreshing..." : ", auto-refresh enabled" );
 	}
 	else if ( g_pass == nullptr && g_incoming == nullptr ) {
 		text << ( g_job->running ? "building the map around the camera..." : "waiting for q3map2..." );
-	}
-	else if ( g_job->fromBsp ) {
-		text << QFileInfo( g_job->mapFile ).fileName().toStdString();
 	}
 	else {
 		const Pass& pass = g_incoming != nullptr ? *g_incoming : *g_pass;
@@ -529,30 +636,31 @@ void describe(){
 }
 
 /// Takes a newer snapshot file, if there is one.
-void poll_file(){
+bool read_snapshot(){
 	if ( g_job == nullptr ) {
-		return;
+		return false;
 	}
-	update_overlay(); // the log has moved on since the last tick
 	const QFileInfo info( g_job->lsnFile );
 	if ( !info.exists() ) {
-		return;
+		return false;
 	}
 	if ( info.lastModified() == g_job->loadedTime && info.size() == g_job->loadedSize ) {
-		return;
+		return true;
 	}
 
 	QFile file( g_job->lsnFile );
 	if ( !file.open( QIODevice::ReadOnly ) ) {
-		return; // try again next tick
+		return false; // try again next tick
 	}
-	const QByteArray data = file.readAll();
+	const QByteArray data = g_job->fromCache ? ReadLightCachePreview( file ) : file.readAll();
 	file.close();
 
 	auto pass = std::make_shared<Pass>();
 	if ( !parse( data, *pass ) ) {
-		return; // half written, if it ever is; the next tick will see it whole
+		return false; // half written, if it ever is; the next tick will see it whole
 	}
+	if ( g_job->fromBsp && !g_job->bspWatch->isCurrent( g_job->bspRevision ) )
+		return false;
 	g_job->loadedTime = info.lastModified();
 	g_job->loadedSize = info.size();
 
@@ -564,6 +672,23 @@ void poll_file(){
 	describe();
 	if ( g_job->redraw ) {
 		g_job->redraw();
+	}
+	return true;
+}
+
+void start_bsp_reload();
+
+void poll_file(){
+	if ( !g_job ) return;
+	update_overlay();
+	if ( g_job->fromBsp ) {
+		// BSP exports are accepted on successful process exit, after checking
+		// their source again. An in-progress export never replaces the preview.
+		if ( !g_job->running && g_job->bspWatch->takeUpdate() )
+			start_bsp_reload();
+	}
+	else {
+		read_snapshot();
 	}
 }
 
@@ -613,8 +738,60 @@ CopiedString expand( const char* stage, const char* flags, const QString& extra,
 	return build_expand_command( command.c_str(), job.mapFile.toUtf8().constData(), job.bspFile.toUtf8().constData() );
 }
 
+void start_bsp_reload(){
+	Job& job = *g_job;
+	job.bspRevision = job.bspWatch->revision();
+	job.loadedTime = QDateTime();
+	job.loadedSize = -1;
+	if ( job.fromCache ) {
+		job.failed = !read_snapshot();
+		if ( job.failed ) {
+			job.bspWatch->retry();
+			globalErrorStream() << "Lighting cache: cannot read a complete preview from " << job.lsnFile.toUtf8().constData() << '\n';
+		}
+		else globalOutputStream() << "Lighting cache: refreshed " << job.lsnFile.toUtf8().constData() << '\n';
+		describe();
+		if ( job.redraw ) job.redraw();
+		return;
+	}
+	// Remove the previous export so a failed conversion cannot look successful.
+	if ( QFile::exists( job.lsnFile ) && !QFile::remove( job.lsnFile ) ) {
+		job.failed = true;
+		job.bspWatch->retry();
+		describe();
+		if ( job.redraw ) job.redraw();
+		return;
+	}
+	QFile::remove( job.logFile );
+	job.running = true;
+	job.failed = false;
+	globalOutputStream() << "BSP lighting: refreshing " << job.bspFile.toUtf8().constData() << '\n';
+	describe();
+	start_stage( QString::fromUtf8( expand( "-lightsnapbsp", "", "-lightsnap \"" + job.lsnFile + "\"", job ).c_str() ), true );
+}
+
 void finish_stage( int exitCode, QProcess::ExitStatus status, bool light ){
 	Job& job = *g_job;
+	if ( job.fromBsp ) {
+		job.running = false;
+		if ( job.bspWatch->isCurrent( job.bspRevision ) ) {
+			job.failed = status != QProcess::NormalExit || exitCode != 0 || !read_snapshot();
+			if ( !job.bspWatch->isCurrent( job.bspRevision ) ) {
+				job.failed = false;
+			}
+			else if ( job.failed ) {
+				job.bspWatch->retry();
+				globalErrorStream() << "BSP lighting: refresh failed, see " << job.logFile.toUtf8().constData() << '\n';
+			}
+			else {
+				globalOutputStream() << "BSP lighting: refreshed; watching for recompiles\n";
+			}
+		}
+		// Otherwise a newer BSP is pending; leave the previous preview on screen.
+		describe();
+		if ( job.redraw ) job.redraw();
+		return;
+	}
 	if ( status != QProcess::NormalExit || exitCode != 0 ) {
 		job.running = false;
 		job.failed = true;
@@ -667,6 +844,72 @@ void upload_lightmaps( const Pass& pass ){
 	gl().glBindTexture( GL_TEXTURE_2D, 0 );
 }
 
+bool ensure_gamma_program(){
+	if ( g_gammaProgram != 0 ) return true;
+	if ( g_gammaProgramFailed ) return false;
+	static const char* vertex = R"GLSL(#version 120
+varying vec2 v_st;
+varying vec2 v_lm;
+varying vec4 v_color;
+void main() {
+    gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
+    v_st = gl_MultiTexCoord0.st;
+    v_lm = gl_MultiTexCoord1.st;
+    v_color = gl_Color;
+}
+)GLSL";
+	static const char* fragment = R"GLSL(#version 120
+uniform sampler2D u_diffuse;
+uniform sampler2D u_lightmap;
+uniform bool u_lightmapped;
+uniform float u_scale;
+uniform float u_inverse_gamma;
+varying vec2 v_st;
+varying vec2 v_lm;
+varying vec4 v_color;
+void main() {
+    vec4 diffuse = texture2D(u_diffuse, v_st);
+    if (diffuse.a <= 0.25) discard;
+    vec3 light = u_lightmapped ? texture2D(u_lightmap, v_lm).rgb : v_color.rgb;
+    vec3 rgb = clamp(diffuse.rgb * light * u_scale, 0.0, 1.0);
+    gl_FragColor = vec4(pow(rgb, vec3(u_inverse_gamma)), diffuse.a);
+}
+)GLSL";
+	const GLuint program = gl().glCreateProgram();
+	if ( program == 0 ) {
+		g_gammaProgramFailed = true;
+		return false;
+	}
+	bool ok = true;
+	for ( const auto& source : { std::pair{ GL_VERTEX_SHADER, vertex }, std::pair{ GL_FRAGMENT_SHADER, fragment } } ) {
+		const GLuint shader = gl().glCreateShader( source.first );
+		const GLint length = GLint( std::strlen( source.second ) );
+		gl().glShaderSource( shader, 1, &source.second, &length );
+		gl().glCompileShader( shader );
+		GLint compiled = 0;
+		gl().glGetShaderiv( shader, GL_COMPILE_STATUS, &compiled );
+		if ( compiled ) gl().glAttachShader( program, shader );
+		else ok = false;
+		gl().glDeleteShader( shader );
+		if ( !ok ) break;
+	}
+	if ( ok ) {
+		gl().glLinkProgram( program );
+		GLint linked = 0;
+		gl().glGetProgramiv( program, GL_LINK_STATUS, &linked );
+		ok = linked != 0;
+	}
+	if ( !ok ) {
+		gl().glDeleteProgram( program );
+		g_gammaProgramFailed = true;
+		globalErrorStream() << "Lighting preview: gamma shader is unavailable on this OpenGL context\n";
+		return false;
+	}
+	g_gammaProgram = program;
+	g_gammaLightmappedUniform = gl().glGetUniformLocation( program, "u_lightmapped" );
+	return true;
+}
+
 /// A texture unit's environment: \p previous times the unit's own texture (or the vertex colour), scaled.
 void combine( GLenum unit, bool withPrimaryColour, int scale ){
 	gl().glActiveTexture( unit );
@@ -703,6 +946,8 @@ void LightSnap_stop(){
 	if ( g_overlay != nullptr ) {
 		g_overlay->hide();
 	}
+	if ( g_gammaOverlay != nullptr ) g_gammaOverlay->hide();
+	g_redraw = {};
 	clear_pass();
 	set_status( "" );
 }
@@ -747,6 +992,8 @@ void LightSnap_start( const Vector3& origin, std::function<void()> redraw, QWidg
 		globalErrorStream() << "Light snapshot: could not write " << job->mapFile.toUtf8().constData() << '\n';
 		return;
 	}
+	g_redraw = redraw;
+	show_gamma_overlay( parent );
 	globalOutputStream() << "Light snapshot: " << nodes.size() << " nodes within " << g_radius << " units of the camera, in " << job->dir.toUtf8().constData() << '\n';
 
 	const CopiedString metaCommand = expand( "-meta", g_bspFlags.c_str(), "", *job );
@@ -789,8 +1036,11 @@ bool LightSnap_startBSP( std::function<void()> redraw, QWidget* parent, std::fun
 	if ( !Map_Unnamed( g_map ) ) {
 		const QFileInfo mapInfo( QString::fromUtf8( Map_Name( g_map ) ) );
 		start = mapInfo.absolutePath() + '/' + mapInfo.completeBaseName() + ".bsp";
+		const QString cache = mapInfo.absolutePath() + '/' + mapInfo.completeBaseName() + ".lightcache";
+		if ( QFileInfo::exists( cache ) ) start = cache;
 	}
-	const QString bsp = QFileDialog::getOpenFileName( parent, "Load a compiled BSP's lighting", start, "BSP (*.bsp);;All files (*)" );
+	const QString bsp = QFileDialog::getOpenFileName( parent, "Load compiled lighting", start,
+		"Compiled lighting (*.lightcache *.bsp);;Lighting cache (*.lightcache);;BSP (*.bsp);;All files (*)" );
 	if ( bsp.isEmpty() ) {
 		return false;
 	}
@@ -818,14 +1068,14 @@ bool LightSnap_startBSP( std::function<void()> redraw, QWidget* parent, std::fun
 	job->lsnFile = dir + "/bsp.lsn";
 	job->logFile = dir + "/bsp.log";
 	job->fromBsp = true;
+	job->fromCache = QFileInfo( bsp ).suffix().compare( "lightcache", Qt::CaseInsensitive ) == 0;
+	if ( job->fromCache ) job->lsnFile = bsp;
+	job->bspWatch = std::make_unique<BspFileWatch>( bsp );
 	for ( const char* name : { "bsp.lsn", "bsp.lsn.tmp", "bsp.log" } ) {
 		QFile::remove( dir + '/' + name );
 	}
 
-	const CopiedString command = expand( "-lightsnapbsp", "", "-lightsnap \"" + job->lsnFile + "\"", *job );
-	globalOutputStream() << "BSP lighting: reading " << bsp.toUtf8().constData() << '\n';
-
-	job->running = true;
+	globalOutputStream() << ( job->fromCache ? "Lighting cache: watching " : "BSP lighting: watching " ) << bsp.toUtf8().constData() << '\n';
 	g_job = std::move( job );
 
 	g_job->poll = std::make_unique<QTimer>();
@@ -834,12 +1084,25 @@ bool LightSnap_startBSP( std::function<void()> redraw, QWidget* parent, std::fun
 	g_job->poll->start();
 
 	describe();
-	start_stage( QString::fromUtf8( command.c_str() ), true ); // one stage, and it is the last
+	g_redraw = g_job->redraw;
+	show_gamma_overlay( parent );
 	return true;
 }
 
 bool LightSnap_active(){
 	return g_pass != nullptr || g_incoming != nullptr;
+}
+
+float LightSnap_previewGamma(){
+	return std::clamp( g_previewGamma, 0.5f, 3.f );
+}
+
+int LightSnap_brightnessScale(){
+	return c_brightness[ std::clamp( g_brightness, 0, int( std::size( c_brightness ) ) - 1 ) ];
+}
+
+std::string LightSnap_sourcePath(){
+	return g_job && g_job->fromBsp ? g_job->bspFile.toStdString() : std::string();
 }
 
 const char* LightSnap_status(){
@@ -851,6 +1114,10 @@ void LightSnap_unrealise(){
 }
 
 void LightSnap_release(){
+	if ( g_gammaProgram != 0 && GlobalOpenGL().contextValid ) gl().glDeleteProgram( g_gammaProgram );
+	g_gammaProgram = 0;
+	g_gammaLightmappedUniform = -1;
+	g_gammaProgramFailed = false;
 	if ( !g_lightmapTextures.empty() && GlobalOpenGL().contextValid ) {
 		gl().glDeleteTextures( GLsizei( g_lightmapTextures.size() ), g_lightmapTextures.data() );
 	}
@@ -876,6 +1143,8 @@ void LightSnap_draw( const Matrix4& modelview, const Matrix4& projection ){
 	}
 
 	const int scale = c_brightness[ std::clamp( g_brightness, 0, int( std::size( c_brightness ) ) - 1 ) ];
+	const float gamma = std::clamp( g_previewGamma, 0.5f, 3.f );
+	const bool gammaShader = std::abs( gamma - 1.f ) > 0.001f && ensure_gamma_program();
 
 	gl().glMatrixMode( GL_PROJECTION );
 	gl().glLoadMatrixf( reinterpret_cast<const float*>( &projection ) );
@@ -898,6 +1167,13 @@ void LightSnap_draw( const Matrix4& modelview, const Matrix4& projection ){
 	gl().glAlphaFunc( GL_GREATER, 0.25f );
 	gl().glUseProgram( 0 );
 	gl().glColor4f( 1, 1, 1, 1 );
+	if ( gammaShader ) {
+		gl().glUseProgram( g_gammaProgram );
+		gl().glUniform1i( gl().glGetUniformLocation( g_gammaProgram, "u_diffuse" ), 0 );
+		gl().glUniform1i( gl().glGetUniformLocation( g_gammaProgram, "u_lightmap" ), 1 );
+		gl().glUniform1f( gl().glGetUniformLocation( g_gammaProgram, "u_scale" ), float( scale ) );
+		gl().glUniform1f( gl().glGetUniformLocation( g_gammaProgram, "u_inverse_gamma" ), 1.f / gamma );
+	}
 
 	/* The scene pass leaves whatever arrays its last bucket used switched on, pointing at
 	   memory that has since moved (the camera's own 2D drawing clears them, but that comes
@@ -920,6 +1196,7 @@ void LightSnap_draw( const Matrix4& modelview, const Matrix4& projection ){
 	bool lightmapped = false, first = true;
 	for ( const Batch& batch : g_pass->batches ) {
 		const bool useLightmap = batch.lightmap >= 0 && std::size_t( batch.lightmap ) < g_lightmapTextures.size();
+		if ( gammaShader ) gl().glUniform1i( g_gammaLightmappedUniform, useLightmap ? 1 : 0 );
 
 		GLuint diffuse = 0;
 		if ( batch.shader < g_shaders.size() && g_shaders[ batch.shader ] != nullptr ) {
@@ -972,6 +1249,7 @@ void LightSnap_draw( const Matrix4& modelview, const Matrix4& projection ){
 	}
 
 	/* hand the state back as the camera's own 2D drawing expects to find it */
+	if ( gammaShader ) gl().glUseProgram( 0 );
 	gl().glDisableClientState( GL_COLOR_ARRAY );
 	gl().glClientActiveTexture( GL_TEXTURE1 );
 	gl().glDisableClientState( GL_TEXTURE_COORD_ARRAY );
@@ -1009,9 +1287,10 @@ void LightSnap_constructPreferences( PreferencesPage& page ){
 	    "compile does. Each bounce is shown as it finishes, so -bounce 8 costs\n"
 	    "nothing but time before the end."
 	);
-	page.appendCombo( "Light snapshot: brightness", g_brightness, StringArrayRange( c_brightnessNames ) )->setToolTip(
-	    "How much the lightmaps are multiplied by when drawn, to match the game's\n"
-	    "overbright setting. Lightmaps drawn too dark: raise it."
+	page.appendCombo( "Light preview: lightmap scale", g_brightness, StringArrayRange( c_brightnessNames ) )->setToolTip(
+	    "Multiplies lightmaps in the editor preview by 1x, 2x or 4x.\n"
+	    "This approximates the game's overbright setting, but the exact result\n"
+	    "depends on its renderer, gamma and shader stages. Compare captures."
 	);
 }
 
@@ -1019,5 +1298,8 @@ void LightSnap_registerPreferences(){
 	GlobalPreferenceSystem().registerPreference( "LightSnapRadius", IntImportStringCaller( g_radius ), IntExportStringCaller( g_radius ) );
 	GlobalPreferenceSystem().registerPreference( "LightSnapMetaFlags", CopiedStringImportStringCaller( g_bspFlags ), CopiedStringExportStringCaller( g_bspFlags ) );
 	GlobalPreferenceSystem().registerPreference( "LightSnapLightFlags", CopiedStringImportStringCaller( g_lightFlags ), CopiedStringExportStringCaller( g_lightFlags ) );
-	GlobalPreferenceSystem().registerPreference( "LightSnapBrightness", IntImportStringCaller( g_brightness ), IntExportStringCaller( g_brightness ) );
+	// The legacy brightness preference defaulted to 2x and silently persisted it.
+	// Start existing installations at 1x, then remember explicit scale choices.
+	GlobalPreferenceSystem().registerPreference( "LightSnapLightmapScale", IntImportStringCaller( g_brightness ), IntExportStringCaller( g_brightness ) );
+	GlobalPreferenceSystem().registerPreference( "LightSnapPreviewGamma", FloatImportStringCaller( g_previewGamma ), FloatExportStringCaller( g_previewGamma ) );
 }

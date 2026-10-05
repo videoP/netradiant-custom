@@ -30,6 +30,7 @@
 
 /* dependencies */
 #include "q3map2.h"
+#include "light_incremental.h"
 #include "bspfile_rbsp.h"
 #include <set>
 
@@ -1457,6 +1458,15 @@ struct contribution_t
 };
 
 static void TraceGrid( int num ){
+	if ( LightCacheRestoreGrid( num ) ) return;
+	// A sample's nudge sequence must not depend on which other samples were
+	// reused, or on worker scheduling. Stock builds retain the original RNG.
+	uint32_t nudgeState = uint32_t( num ) + 1;
+	const auto nudgeRandom = [&]() {
+		if ( !lightCacheActive ) return Random();
+		nudgeState = nudgeState * 1664525u + 1013904223u;
+		return float( nudgeState >> 8 ) / 16777216.0f;
+	};
 	int i, j, x, y, z, mod, numCon, numStyles;
 	Vector3 cheapColor, thisdir;
 	contribution_t contributions[ MAX_CONTRIBUTIONS ];
@@ -1488,9 +1498,9 @@ static void TraceGrid( int num ){
 		while ( ( step += 0.005 ) <= 1 )
 		{
 			trace.origin = baseOrigin;
-			trace.origin[ 0 ] += step * ( Random() - 0.5 ) * gridSize[0];
-			trace.origin[ 1 ] += step * ( Random() - 0.5 ) * gridSize[1];
-			trace.origin[ 2 ] += step * ( Random() - 0.5 ) * gridSize[2];
+			trace.origin[ 0 ] += step * ( nudgeRandom() - 0.5 ) * gridSize[0];
+			trace.origin[ 1 ] += step * ( nudgeRandom() - 0.5 ) * gridSize[1];
+			trace.origin[ 2 ] += step * ( nudgeRandom() - 0.5 ) * gridSize[2];
 
 			/* ydnar: changed to find cluster num */
 			trace.cluster = ClusterForPointExt( trace.origin, VERTEX_EPSILON );
@@ -1922,6 +1932,8 @@ static void WriteBSPFileAfterLight( const char *bspFileName ){
    does what it says...
  */
 
+static void TraceGridWork( int i ) { TraceGrid( LightCacheGridWorkIndex( i ) ); }
+
 static void LightWorld( bool fastAllocate, bool bounceStore ){
 	Vector3 color;
 	float f;
@@ -1971,25 +1983,28 @@ static void LightWorld( bool fastAllocate, bool bounceStore ){
 
 	/* determine the number of grid points */
 	Sys_Printf( "--- SetupGrid ---\n" );
-	SetupGrid( ambientColor );
+	LightCacheTimed( "grid setup", [&] { SetupGrid( ambientColor ); } );
 
 	/* create world lights */
 	Sys_FPrintf( SYS_VRB, "--- CreateLights ---\n" );
-	CreateEntityLights();
-	CreateSurfaceLights();
+	LightCacheTimed( "create lights", [&] { CreateEntityLights(); CreateSurfaceLights(); } );
 	Sys_Printf( "%9d point lights\n", numPointLights );
 	Sys_Printf( "%9d spotlights\n", numSpotLights );
 	Sys_Printf( "%9d diffuse (area) lights\n", numDiffuseLights );
 	Sys_Printf( "%9d sun/sky lights\n", numSunLights );
+	LightCacheTimed( "cache validation", [&] { LightCachePrepare(); } );
+	if ( lightCacheRequested && LightCacheTraceEligible() )
+		LightCacheTimed( "trace setup", [&] { SetupTraceNodes(); } );
 
 	/* calculate lightgrid */
 	if ( !noGridLighting ) {
 		/* ydnar: set up light envelopes */
 		SetupEnvelopes( true, fastgrid );
+		LightCacheGridDependencies();
 
 		Sys_Printf( "--- TraceGrid ---\n" );
 		inGrid = true;
-		RunThreadsOnIndividual( rawGridPoints.size(), true, TraceGrid );
+		LightCacheTimed( "grid lighting", [&] { RunThreadsOnIndividual( LightCacheGridWorkCount(), true, TraceGridWork ); } );
 		inGrid = false;
 		Sys_Printf( "%d x %d x %d = %zu grid\n",
 		            gridBounds[ 0 ], gridBounds[ 1 ], gridBounds[ 2 ], bspGridPoints.size() );
@@ -2004,7 +2019,7 @@ static void LightWorld( bool fastAllocate, bool bounceStore ){
 
 	/* map the world luxels */
 	Sys_Printf( "--- MapRawLightmap ---\n" );
-	RunThreadsOnIndividual( numRawLightmaps, true, MapRawLightmap );
+	LightCacheTimed( "luxel mapping", [&] { RunThreadsOnIndividual( numRawLightmaps, true, MapRawLightmap ); } );
 	Sys_Printf( "%9d luxels\n", numLuxels );
 	Sys_Printf( "%9d luxels mapped\n", numLuxelsMapped );
 	Sys_Printf( "%9d luxels occluded\n", numLuxelsOccluded );
@@ -2020,6 +2035,7 @@ static void LightWorld( bool fastAllocate, bool bounceStore ){
 
 	/* ydnar: set up light envelopes */
 	SetupEnvelopes( false, fast );
+	LightCacheTimed( "surface dependencies", [&] { LightCacheSurfaceDependencies(); } );
 
 	/* light up my world */
 	lightsPlaneCulled = 0;
@@ -2028,13 +2044,14 @@ static void LightWorld( bool fastAllocate, bool bounceStore ){
 	lightsClusterCulled = 0;
 
 	Sys_Printf( "--- IlluminateRawLightmap ---\n" );
-	RunThreadsOnIndividual( numRawLightmaps, true, IlluminateRawLightmap );
+	LightCacheTimed( "lightmap lighting", [&] { RunThreadsOnIndividual( numRawLightmaps, true, IlluminateRawLightmap ); } );
 	Sys_Printf( "%9d luxels illuminated\n", numLuxelsIlluminated );
+	LightCacheTimed( "sample capture", [&] { LightCacheCapture(); } );
 
-	StitchSurfaceLightmaps();
+	LightCacheTimed( "stitching", [&] { StitchSurfaceLightmaps(); } );
 
 	Sys_Printf( "--- IlluminateVertexes ---\n" );
-	RunThreadsOnIndividual( bspDrawSurfaces.size(), true, IlluminateVertexes );
+	LightCacheTimed( "vertex lighting", [&] { RunThreadsOnIndividual( bspDrawSurfaces.size(), true, IlluminateVertexes ); } );
 	Sys_Printf( "%9d vertexes illuminated\n", numVertsIlluminated );
 
 	/* ydnar: emit statistics on light culling */
@@ -2127,12 +2144,12 @@ static void LightWorld( bool fastAllocate, bool bounceStore ){
 	}
 
 	/* ydnar: store off lightmaps */
-	StoreSurfaceLightmaps( fastAllocate, true );
+	LightCacheTimed( "output lightmaps", [&] { StoreSurfaceLightmaps( fastAllocate, true ); } );
 
 	/* write out the bsp */
 	UnparseEntities();
-	WriteBSPFileAfterLight( source );
-	WriteLightSnapshot( lightSnapFile.c_str(), bt, true );
+	LightCacheTimed( "BSP writing", [&] { WriteBSPFileAfterLight( source ); } );
+	LightCacheTimed( "preview writing", [&] { WriteLightSnapshot( lightSnapFile.c_str(), bt, true ); } );
 }
 
 
@@ -2245,6 +2262,9 @@ int LightMain( Args& args ){
 	/* process commandline arguments */
 	const char *fileName = args.takeBack();
 	const auto argsToInject = args.getVector();
+	incrementalLighting = args.takeArg( "-incremental" );
+	incrementalLightingDebug = args.takeArg( "-incrementaldebug" );
+	lightCacheRequested = args.takeArg( "-lightcache" ) || incrementalLighting;
 	{
 		/* lightsource scaling */
 		while ( args.takeArg( "-point", "-pointscale" ) ) {
@@ -2931,6 +2951,7 @@ int LightMain( Args& args ){
 	/* clean up map name */
 	strcpy( source, ExpandArg( fileName ) );
 	path_set_extension( source, ".bsp" );
+	LightCacheBegin( fileName );
 
 	/* ydnar: set default sample size */
 	SetDefaultSampleSize( sampleSize );
@@ -2950,11 +2971,13 @@ int LightMain( Args& args ){
 
 	/* parse bsp entities */
 	ParseEntities();
+	LightCacheGeometry();
 
 	/* inject command line parameters */
 	InjectCommandLine( "-light", argsToInject );
 
 	/* load map file */
+	LightCacheObserveScripts( false );
 	if ( !entities[ 0 ].boolForKey( "_keepLights" ) ) {
 		char *mapFileName = ExpandArg( fileName );
 		if ( !path_extension_is( fileName, "reg" ) ) /* not .reg */
@@ -2962,6 +2985,7 @@ int LightMain( Args& args ){
 
 		LoadMapFile( CopiedString( mapFileName ).c_str(), true, false );
 	}
+	LightCacheObserveScripts( true );
 
 	/* set the entity/model origins and init yDrawVerts */
 	SetEntityOrigins();
@@ -2981,17 +3005,21 @@ int LightMain( Args& args ){
 	}
 
 	/* ydnar: set up optimization */
-	SetupBrushes();
+	LightCacheTimed( "brush setup", [&] { SetupBrushes(); } );
 	SetupWaterBrushes();
 	SetupDirt();
 	SetupFloodLight();
-	SetupSurfaceLightmaps();
+	LightCacheTimed( "surface setup", [&] { SetupSurfaceLightmaps(); } );
+	if ( lightCacheRequested )
+		LightCacheTimed( "trace model inputs", [&] { LightCacheTraceInputs(); } );
 
 	/* initialize the surface facet tracing */
-	SetupTraceNodes();
+	if ( !lightCacheRequested || !LightCacheTraceEligible() )
+		LightCacheTimed( "trace setup", [&] { SetupTraceNodes(); } );
 
 	/* light the world */
 	LightWorld( fastAllocate, bounceStore );
+	LightCacheTimed( "cache writing", [&] { LightCacheFinish(); } );
 
 	/* ydnar: export lightmaps */
 	if ( exportLightmaps && !externalLightmaps ) {

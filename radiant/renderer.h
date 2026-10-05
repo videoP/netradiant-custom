@@ -117,9 +117,10 @@ class RenderHighlighted
 {
 	Renderer& m_renderer;
 	const VolumeTest& m_volume;
+	bool m_hideEntityMarkers;
 public:
-	RenderHighlighted( Renderer& renderer, const VolumeTest& volume )
-		: m_renderer( renderer ), m_volume( volume ){
+	RenderHighlighted( Renderer& renderer, const VolumeTest& volume, bool hideEntityMarkers = false )
+		: m_renderer( renderer ), m_volume( volume ), m_hideEntityMarkers( hideEntityMarkers ){
 	}
 	void render( const Renderable& renderable ) const {
 		switch ( m_renderer.getStyle() )
@@ -143,7 +144,7 @@ public:
 				renderable->viewChanged();
 			}
 
-			if ( Instance_isSelected( instance ) ) {
+			if ( !m_hideEntityMarkers && Instance_isSelected( instance ) ) {
 				if ( GlobalSelectionSystem().Mode() != SelectionSystem::eComponent ) {
 					m_renderer.Highlight( Renderer::eFace );
 				}
@@ -156,7 +157,9 @@ public:
 					m_renderer.Highlight( Renderer::ePrimitive );
 			}
 
-			if ( renderable ) {
+			// Point entities draw editor-only boxes, diamonds, names and target lines.
+			// Keep traversing the entity so its brush/model children still render.
+			if ( renderable && !( m_hideEntityMarkers && Node_isEntity( path.top() ) ) ) {
 				render( *renderable );
 			}
 		}
@@ -168,15 +171,17 @@ public:
 	}
 };
 
-inline void Scene_Render( Renderer& renderer, const VolumeTest& volume ){
+inline void Scene_Render( Renderer& renderer, const VolumeTest& volume, bool hideEntityMarkers = false ){
 	{
 		FrameTimerScope timer( g_frametime_batch );
 		StaticBatch_begin( renderer, volume );
 	}
 	{
 		FrameTimerScope timer( g_frametime_walk );
-		Scene_traverseVisible( GlobalSceneGraph(), volume, ForEachVisible<RenderHighlighted>( volume, RenderHighlighted( renderer, volume ) ) );
+		Scene_traverseVisible( GlobalSceneGraph(), volume, ForEachVisible<RenderHighlighted>( volume, RenderHighlighted( renderer, volume, hideEntityMarkers ) ) );
 	}
 	StaticBatch_end();
-	GlobalShaderCache().forEachRenderable( RenderHighlighted::RenderCaller( RenderHighlighted( renderer, volume ) ) );
+	if ( !hideEntityMarkers ) {
+		GlobalShaderCache().forEachRenderable( RenderHighlighted::RenderCaller( RenderHighlighted( renderer, volume ) ) );
+	}
 }

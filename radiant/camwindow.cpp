@@ -58,13 +58,26 @@
 #include "simlights.h"
 #include "lightsnapshot.h"
 #include "simshadows.h"
+#include "map.h"
 
 #include "timer.h"
 
 #include <QOpenGLWidget>
 
 #include <QApplication>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QImage>
+#include <QMessageBox>
 #include <QTimer>
+#include <QSaveFile>
+#include <QTextStream>
+
+#include <cmath>
+
+/// Suppress camera HUD and selection overlays while reading its GL framebuffer.
+bool g_lightComparisonCapture = false;
 
 // https://stackoverflow.com/questions/42566421/how-to-queue-lambda-function-into-qts-event-loop/42566867#42566867
 template <typename Fun> void postCall( QObject * obj, Fun && fun ) {
@@ -1638,7 +1651,8 @@ protected:
 			}
 			m_fbo->blit();
 			m_fbo->release();
-			m_camwnd.m_XORRectangle.render( m_camwnd.m_XORRect, m_camwnd.getCamera().width, m_camwnd.getCamera().height );
+			if ( !g_lightComparisonCapture )
+				m_camwnd.m_XORRectangle.render( m_camwnd.m_XORRect, m_camwnd.getCamera().width, m_camwnd.getCamera().height );
 			GlobalOpenGL_debugAssertNoErrors();
 		}
 	}
@@ -2043,6 +2057,111 @@ void LightLoadBSP(){
 	}
 }
 
+/// Save the camera's real GL output and the commands needed to reproduce its view in TaystJK.
+void CaptureLightingComparison(){
+	if ( g_camwnd == nullptr || !g_lightSnap_enabled || !LightSnap_active() ) {
+		QMessageBox::information( nullptr, "Lighting comparison", "Load a lighting cache or BSP in the camera and wait for its preview to appear first." );
+		return;
+	}
+	auto* widget = qobject_cast<QOpenGLWidget*>( CamWnd_getWidget( *g_camwnd ) );
+	if ( widget == nullptr || !widget->isVisible() ) {
+		QMessageBox::warning( nullptr, "Lighting comparison", "The camera view must be visible to capture it." );
+		return;
+	}
+
+	const QString mapPath = QString::fromUtf8( Map_Name( g_map ) );
+	const QFileInfo mapInfo( mapPath );
+	const QString source = QString::fromStdString( LightSnap_sourcePath() );
+	const QString gameMap = QFileInfo( source.isEmpty() ? mapPath : source ).completeBaseName();
+	const QString directory = Map_Unnamed( g_map ) ? QDir::homePath() : mapInfo.absolutePath();
+	QString imagePath = QFileDialog::getSaveFileName( widget, "Export lighting comparison", directory + '/' + gameMap + "-lighting-preview.png", "PNG image (*.png)" );
+	if ( imagePath.isEmpty() ) return;
+	if ( !imagePath.endsWith( ".png", Qt::CaseInsensitive ) ) imagePath += ".png";
+
+	const Vector3 originalAngles = Camera_getAngles( *g_camwnd );
+	Vector3 levelAngles = originalAngles;
+	levelAngles[CAMERA_PITCH] = 0;
+	levelAngles[CAMERA_ROLL] = 0;
+	const camera_draw_mode originalMode = CamWnd_GetMode();
+	const bool originalSimLights = g_simLights_enabled;
+	const Vector3 origin = Camera_getOrigin( *g_camwnd );
+	const float fov = camera_t::fieldOfView;
+	const float gamma = LightSnap_previewGamma();
+	const int brightness = LightSnap_brightnessScale();
+
+	// setviewpos accepts only yaw. Use a level camera for this one frame, then restore the editor.
+	g_lightComparisonCapture = true;
+	g_simLights_enabled = false;
+	if ( originalMode != cd_texture ) CamWnd_SetMode( cd_texture );
+	Camera_setAngles( *g_camwnd, levelAngles );
+	CamWnd_Update( *g_camwnd );
+	widget->repaint();
+	const QImage image = widget->grabFramebuffer();
+	g_lightComparisonCapture = false;
+	g_simLights_enabled = originalSimLights;
+	Camera_setAngles( *g_camwnd, originalAngles );
+	if ( originalMode != cd_texture ) CamWnd_SetMode( originalMode );
+	CamWnd_Update( *g_camwnd );
+
+	if ( image.isNull() || !image.save( imagePath, "PNG" ) ) {
+		QMessageBox::warning( widget, "Lighting comparison", "Could not save the camera screenshot." );
+		return;
+	}
+
+	const QString reportPath = QFileInfo( imagePath ).absolutePath() + '/' + QFileInfo( imagePath ).completeBaseName() + ".txt";
+	QString text;
+	QTextStream out( &text );
+	const auto number = []( float value ){ return QString::number( value, 'f', 3 ); };
+	const QString position = number( origin[0] ) + ' ' + number( origin[1] ) + ' ' + number( origin[2] );
+	// TaystJK TeleportPlayer adds 1 to the requested Z, then its standing camera adds 36.
+	const QString setviewpos = "setviewpos " + number( origin[0] ) + ' ' + number( origin[1] ) + ' '
+	                         + number( origin[2] - 37.f ) + ' ' + number( levelAngles[CAMERA_YAW] );
+	const int overbrightBits = brightness == 4 ? 2 : brightness == 2 ? 1 : 0;
+	out << "NetRadiant lighting comparison\n\n"
+	    << "Editor screenshot: " << imagePath << '\n'
+	    << "Map open in editor: " << mapPath << '\n'
+	    << "Preview source: " << ( source.isEmpty() ? QString( "local q3map2 snapshot" ) : source ) << '\n'
+	    << "Camera eye: " << position << " (pitch 0, yaw " << number( levelAngles[CAMERA_YAW] ) << ")\n"
+	    << "Camera horizontal FOV: " << number( fov ) << '\n'
+	    << "Image size: " << image.width() << 'x' << image.height() << " pixels\n"
+	    << "Preview gamma: " << number( gamma ) << ", brightness: " << brightness << "x\n\n"
+	    << "TaystJK: launch taystjk.x86.exe from D:/Code/JKAMapping/Gamedata.\n"
+	    << "In its console, set up the renderer before loading the same compiled BSP:\n"
+	    << "set r_fullscreen 0\n"
+	    << "set r_mode -1\n"
+	    << "set r_customwidth " << image.width() << '\n'
+	    << "set r_customheight " << image.height() << '\n'
+	    << "set r_picmip 0\n"
+	    << "set r_vertexLight 0\n"
+	    << "set r_dynamiclight 0\n"
+	    << "set r_overBrightBits " << overbrightBits << '\n'
+	    << "set r_gamma " << number( gamma ) << '\n'
+	    << "set cg_fovAspectAdjust 0\n"
+	    << "set cg_fov " << number( fov ) << '\n'
+	    << "set cg_thirdPerson 0\n"
+	    << "set cg_draw2D 0\n"
+	    << "vid_restart\n"
+	    << "devmap " << gameMap << "\n\n"
+	    << "After the map finishes loading, run:\n"
+	    << setviewpos << '\n'
+	    << "viewpos\n"
+	    << "screenshot\n\n"
+	    << "Capture used a level view because TaystJK setviewpos accepts yaw only; the editor camera was restored.\n"
+	    << "The setviewpos Z accounts for TaystJK's standing eye height and teleport offset.\n"
+	    << "TaystJK setviewpos also pushes the player forward; check viewpos after motion stops before comparing images.\n"
+	    << "The editor lightmap scale approximates game overbright; renderer backends can apply it differently.\n"
+	    << "For a neutral baseline use preview gamma 1.00 and brightness 1x, with game r_gamma 1 and r_overBrightBits 0.\n"
+	    << "Compare opaque static surfaces first. Game shader stages, entities and sky effects may render differently.\n";
+	QSaveFile report( reportPath );
+	const QByteArray reportBytes = text.toUtf8();
+	if ( !report.open( QIODevice::WriteOnly ) || report.write( reportBytes ) != reportBytes.size() || !report.commit() ) {
+		QMessageBox::warning( widget, "Lighting comparison", "Screenshot saved, but the matching game instructions could not be written." );
+		return;
+	}
+	globalOutputStream() << "Lighting comparison: saved " << imagePath.toUtf8().constData() << " and " << reportPath.toUtf8().constData() << '\n';
+	globalOutputStream() << "TaystJK camera: " << setviewpos.toUtf8().constData() << '\n';
+}
+
 void CamWnd::Cam_Draw(){
 	/* The simulated lights come first: their shadow maps are drawn through the render
 	   states, which the walk below is about to fill, and they leave GL state for the
@@ -2167,7 +2286,7 @@ void CamWnd::Cam_Draw(){
 		                      g_camwindow_globals_private.m_bFaceFill ? m_state_select1 : 0,
 		                      m_view.getViewer() );
 
-		Scene_Render( renderer, m_view );
+		Scene_Render( renderer, m_view, g_lightComparisonCapture );
 
 		if( g_camwindow_globals_private.m_bShowWorkzone && GlobalSelectionSystem().countSelected() != 0 && GlobalSelectionSystem().ManipulatorMode() != SelectionSystem::eUV ){
 			m_draw_workzone.render( renderer, m_state_workzone );
@@ -2187,6 +2306,7 @@ void CamWnd::Cam_Draw(){
 		LightSnap_draw( m_Camera.modelview, m_Camera.projection );
 	}
 
+	if ( !g_lightComparisonCapture ) {
 	// prepare for 2d stuff
 	gl().glColor4f( 1, 1, 1, 1 );
 	gl().glDisable( GL_BLEND );
@@ -2295,6 +2415,7 @@ void CamWnd::Cam_Draw(){
 		}
 	}
 
+	}
 	// bind back to the default texture so that we don't have problems
 	// elsewhere using/modifying texture maps between contexts
 	gl().glBindTexture( GL_TEXTURE_2D, 0 );
@@ -2456,7 +2577,7 @@ void CamWnd_constructToolbar( QToolBar* toolbar ){
 	if ( g_pGameDescription->mGameType != "doom3" ) {
 		toolbar_append_toggle_button( toolbar, "Light preview: simulated map lights (light entities, q3map_surfacelight faces, q3map_sun) with shadows from the nearest lights", "view_simlights.png", "ToggleSimLights" );
 		toolbar_append_toggle_button( toolbar, "Light snapshot: q3map2 lights the map around the camera, bounce included, and each pass is shown as it finishes", "view_lightsnap.png", "ToggleLightSnap" );
-			toolbar_append_button( toolbar, "Load a compiled BSP's lighting (its lightmaps and vertex lighting) into the camera view; the snapshot button above clears it", "view_lightbsp.png", "LoadBSPLighting" );
+			toolbar_append_button( toolbar, "Load a lighting cache (.lightcache) or BSP into the camera view and automatically refresh it after recompiles; the snapshot button above clears it", "view_lightbsp.png", "LoadBSPLighting" );
 	}
 }
 
@@ -2742,6 +2863,7 @@ void CamWnd_Construct(){
 	GlobalToggles_insert( "ShowSize3d", makeCallbackF( ShowSize3dToggle ), ToggleItem::AddCallbackCaller( g_show_size3d ) );
 	GlobalToggles_insert( "ToggleLightSnap", makeCallbackF( LightSnapToggle ), ToggleItem::AddCallbackCaller( g_lightsnap_item ) );
 	GlobalCommands_insert( "LoadBSPLighting", makeCallbackF( LightLoadBSP ) );
+	GlobalCommands_insert( "CaptureLightingComparison", makeCallbackF( CaptureLightingComparison ) );
 	GlobalToggles_insert( "ToggleSimLights", makeCallbackF( SimLightsToggle ), ToggleItem::AddCallbackCaller( g_simlights_item ) );
 	GlobalToggles_insert( "ToggleSimShadows", makeCallbackF( SimShadowsToggle ), ToggleItem::AddCallbackCaller( g_simshadows_item ) );
 

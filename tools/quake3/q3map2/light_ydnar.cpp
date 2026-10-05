@@ -30,6 +30,7 @@
 
 /* dependencies */
 #include "q3map2.h"
+#include "light_incremental.h"
 #include "timer.h"
 
 
@@ -2104,6 +2105,7 @@ inline void FreeTraceLights( trace_t *trace ){
 static void FloodlightIlluminateLightmap( rawLightmap_t *lm );
 
 void IlluminateRawLightmap( int rawLightmapNum ){
+	if ( LightCacheRestoreLightmap( rawLightmapNum ) ) return;
 	int t, x, y, sx, sy, size, luxelFilterRadius, lightmapNum;
 	int                 mapped, lighted, totalLighted;
 	rawLightmap_t       *lm;

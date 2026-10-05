@@ -437,7 +437,16 @@ void InjectCommandLine( const char *stage, const std::vector<const char *>& args
 				str << *c;
 	}
 
-	entities[0].setKeyValue( "_q3map2_cmdline", str );
+	// Repeated light-only builds append history without rebuilding entities.
+	// Keep recent stages within the parser's token limit, so the BSP remains
+	// readable after many incremental edits.
+	std::string history( str.c_str() );
+	while ( history.size() >= MAXTOKEN ) {
+		const auto separator = history.find( "; " );
+		if ( separator == std::string::npos ) { history.resize( MAXTOKEN - 1 ); break; }
+		history.erase( 0, separator + 2 );
+	}
+	entities[0].setKeyValue( "_q3map2_cmdline", history.c_str() );
 	entities[0].setKeyValue( "_q3map2_version", Q3MAP_VERSION );
 }
 

@@ -1320,6 +1320,24 @@ void SaveBuildMenu(){
 void BuildMenu_Construct(){
 	GlobalPreferenceSystem().registerPreference( "BuildMenu", CopiedStringImportStringCaller( g_buildMenu ), CopiedStringExportStringCaller( g_buildMenu ) );
 	LoadBuildMenu();
+	// Seed editable presets for existing installations as well as fresh ones.
+	// Both use identical direct-light settings, so the full build can seed the
+	// cache used by the incremental build. Other game compilers are unaffected.
+	static bool lightingPresetsAdded = false;
+	GlobalPreferenceSystem().registerPreference( "IncrementalLightingPresets", BoolImportStringCaller( lightingPresetsAdded ), BoolExportStringCaller( lightingPresetsAdded ) );
+	if ( !lightingPresetsAdded && g_build_tools.contains( "q3map2" ) ) {
+		const std::pair<const char*, const char*> presets[] = {
+			{ "Lighting - Full (refresh incremental cache)", "[q3map2] -light -fast -lightcache \"[MapFile]\"" },
+			{ "Lighting - Incremental", "[q3map2] -light -fast -incremental \"[MapFile]\"" },
+		};
+		for ( const auto& [name, command] : presets ) {
+			if ( std::ranges::none_of( g_build_project, [name]( const auto& build ) { return string_equal( build.first.c_str(), name ); } ) ) {
+				g_build_project.emplace_back( name, Build{ BuildCommand( command ) } );
+				g_build_changed = true;
+			}
+		}
+		lightingPresetsAdded = true;
+	}
 }
 void BuildMenu_Destroy(){
 	SaveBuildMenu();

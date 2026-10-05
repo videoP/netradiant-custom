@@ -30,6 +30,7 @@
 
 /* dependencies */
 #include "q3map2.h"
+#include "light_incremental.h"
 #include "bspfile_rbsp.h"
 #include "surface_extra.h"
 #include "timer.h"
@@ -275,6 +276,7 @@ int numPlanarsLightmapped;
 int numNonPlanarsLightmapped;
 int numPatchesLightmapped;
 int numPlanarPatchesLightmapped;
+bool disableCachedSurfaceGroups;
 }
 
 /*
@@ -834,10 +836,16 @@ struct CompareSurfaceInfo
 		}
 
 		/* 27: then shader! */
-		if ( aInfo.si < bInfo.si ) {
+		// Heap addresses vary between compiler processes. Cache builds require
+		// identical chart grouping/order for identical geometry and materials.
+		if ( lightCacheRequested ) {
+			const int shaderOrder = strcmp( aInfo.si->shader, bInfo.si->shader );
+			if ( shaderOrder != 0 ) return shaderOrder > 0;
+		}
+		else if ( aInfo.si < bInfo.si ) {
 			return false;
 		}
-		else if ( aInfo.si > bInfo.si ) {
+		else if ( !lightCacheRequested && aInfo.si > bInfo.si ) {
 			return true;
 		}
 
@@ -898,7 +906,7 @@ struct CompareSurfaceInfo
 		}
 
 		/* these are functionally identical (this should almost never happen) */
-		return false;
+		return lightCacheRequested && a < b;
 	}
 };
 
@@ -913,6 +921,9 @@ struct CompareSurfaceInfo
 void SetupSurfaceLightmaps(){
 	int i, j, k;
 	const int numBSPDrawSurfaces = bspDrawSurfaces.size();
+	const int luxelsBefore = numLuxels;
+	numSurfsVertexLit = numSurfsLightmapped = numPlanarsLightmapped = 0;
+	numNonPlanarsLightmapped = numPatchesLightmapped = numPlanarPatchesLightmapped = 0;
 
 
 	/* note it */
@@ -940,6 +951,19 @@ void SetupSurfaceLightmaps(){
 
 	/* allocate a list of surface indexes to be sorted */
 	int *sortSurfaces = safe_calloc( numBSPDrawSurfaces * sizeof( int ) );
+
+	// Cache builds repeatedly set up the same BSP. Invert its leaf references
+	// once instead of scanning every leaf for every surface. Preserve leaf and
+	// duplicate-reference order, including the original bounds rejection.
+	std::vector<std::vector<int>> surfaceLeafs;
+	if ( lightCacheRequested ) {
+		surfaceLeafs.resize( numBSPDrawSurfaces );
+		for ( size_t leafNum = 0; leafNum < bspLeafs.size(); ++leafNum ) {
+			const bspLeaf_t& leaf = bspLeafs[leafNum];
+			for ( const int surface : Span( &bspLeafSurfaces[leaf.firstBSPLeafSurface], leaf.numBSPLeafSurfaces ) )
+				if ( surface >= 0 && surface < numBSPDrawSurfaces ) surfaceLeafs[surface].push_back( int( leafNum ) );
+		}
+	}
 
 	/* walk each model in the bsp */
 	for ( const bspModel_t& model : bspModels )
@@ -994,7 +1018,16 @@ void SetupSurfaceLightmaps(){
 			}
 
 			/* find all the bsp clusters the surface falls into */
-			for ( const bspLeaf_t& leaf : bspLeafs )
+			if ( lightCacheRequested ) {
+				for ( const int leafNum : surfaceLeafs[num] ) {
+					const bspLeaf_t& leaf = bspLeafs[leafNum];
+					if ( !leaf.minmax.test( info.minmax ) ) continue;
+					if ( numSurfaceClusters >= maxSurfaceClusters ) Error( "maxSurfaceClusters exceeded" );
+					surfaceClusters[numSurfaceClusters++] = leaf.cluster;
+					++info.numSurfaceClusters;
+				}
+			}
+			else for ( const bspLeaf_t& leaf : bspLeafs )
 			{
 				/* test bbox */
 				if( !leaf.minmax.test( info.minmax ) ) {
@@ -1037,6 +1070,16 @@ void SetupSurfaceLightmaps(){
 			}
 		}
 	}
+
+	std::vector<std::vector<int>> groups;
+	const bool cachedGroups = !disableCachedSurfaceGroups && LightCacheLoadSurfaceGroups( groups );
+	std::vector<int> groupForSurface( numBSPDrawSurfaces, -1 );
+	if ( cachedGroups ) {
+		for ( size_t group = 0; group < groups.size(); ++group ) groupForSurface[groups[group][0]] = int( group );
+		Sys_Printf( "Surface cache: reused %zu lightmap groups\n", groups.size() );
+	}
+	else if ( lightCacheRequested ) Sys_Printf( "Surface cache: building lightmap groups\n" );
+	bool validGroups = true;
 
 	/* sort the surfaces info list */
 	std::ranges::sort( Span( sortSurfaces, numBSPDrawSurfaces ), CompareSurfaceInfo() );
@@ -1092,40 +1135,76 @@ void SetupSurfaceLightmaps(){
 		lm.customHeight             = info.si->lmCustomHeight;
 
 		/* add the surface to the raw lightmap */
-		AddSurfaceToRawLightmap( num, lm );
+		validGroups = AddSurfaceToRawLightmap( num, lm ) && validGroups;
 		info.lm = &lm;
 
-		/* do an exhaustive merge */
-		for ( bool added = true; added; )
-		{
-			/* walk the list of surfaces again */
-			added = false;
-			for ( j = i + 1; j < numBSPDrawSurfaces && !lm.finished; ++j )
+		if ( cachedGroups ) {
+			const int group = groupForSurface[num];
+			if ( group < 0 ) validGroups = false;
+			else for ( size_t member = 1; member < groups[group].size() && validGroups; ++member ) {
+				const int surface = groups[group][member];
+				if ( surfaceInfos[surface].lm || lm.finished || !AddSurfaceToRawLightmap( surface, lm ) ) validGroups = false;
+				else surfaceInfos[surface].lm = &lm;
+			}
+			if ( !validGroups ) {
+				Sys_Printf( "Surface cache: rejected invalid grouping; rebuilding\n" );
+				// Discard a semantically invalid grouping before lighting. Projection
+				// writes only output coordinates/origins, which the normal path recomputes.
+				for ( const rawLightmap_t& allocated : Span( rawLightmaps, numRawLightmaps ) ) {
+					free( allocated.lightClusters ); free( allocated.vecs );
+					for ( int style = 0; style < MAX_LIGHTMAPS; ++style ) {
+						free( allocated.bspLuxels[style] ); free( allocated.radLuxels[style] ); free( allocated.superLuxels[style] );
+					}
+					free( allocated.superOrigins ); free( allocated.superNormals ); free( allocated.superDirt );
+					free( allocated.superFloodLight ); free( allocated.superClusters );
+					free( allocated.superDeluxels ); free( allocated.bspDeluxels );
+				}
+				for ( const surfaceInfo_t& allocated : Span( surfaceInfos, numBSPDrawSurfaces ) ) free( allocated.plane );
+				free( rawLightmaps ); free( lightSurfaces ); free( surfaceInfos ); free( surfaceClusters ); free( sortSurfaces );
+				numLuxels = luxelsBefore;
+				disableCachedSurfaceGroups = true;
+				SetupSurfaceLightmaps();
+				disableCachedSurfaceGroups = false;
+				return;
+			}
+		}
+		else {
+			/* do an exhaustive merge */
+			for ( bool added = true; added; )
 			{
-				/* get info and attempt early out */
-				const int num2 = sortSurfaces[ j ];
-				surfaceInfo_t& info2 = surfaceInfos[ num2 ];
-				if ( !info2.hasLightmap || info2.lm != nullptr ) {
-					continue;
-				}
-
-				/* add the surface to the raw lightmap */
-				if ( AddSurfaceToRawLightmap( num2, lm ) ) {
-					info2.lm = &lm;
-					added = true;
-				}
-				else
+				/* walk the list of surfaces again */
+				added = false;
+				for ( j = i + 1; j < numBSPDrawSurfaces && !lm.finished; ++j )
 				{
-					/* back up one */
-					lm.numLightSurfaces--;
-					numLightSurfaces--;
+					/* get info and attempt early out */
+					const int num2 = sortSurfaces[ j ];
+					surfaceInfo_t& info2 = surfaceInfos[ num2 ];
+					if ( !info2.hasLightmap || info2.lm != nullptr ) {
+						continue;
+					}
+
+					/* add the surface to the raw lightmap */
+					if ( AddSurfaceToRawLightmap( num2, lm ) ) {
+						info2.lm = &lm;
+						added = true;
+					}
+					else
+					{
+						/* back up one */
+						lm.numLightSurfaces--;
+						numLightSurfaces--;
+					}
 				}
 			}
+			if ( lightCacheRequested ) groups.emplace_back( lightSurfaces + lm.firstLightSurface,
+				lightSurfaces + lm.firstLightSurface + lm.numLightSurfaces );
 		}
 
 		/* finish the lightmap and allocate the various buffers */
 		FinishRawLightmap( lm );
 	}
+	free( sortSurfaces );
+	if ( !cachedGroups && validGroups ) LightCacheSaveSurfaceGroups( groups );
 
 	if ( debugSampleSize < -1 ){
 		Sys_FPrintf( SYS_WRN | SYS_VRBflag, "+%d similar occurrences;\t-debugsamplesize to show ones\n", -debugSampleSize - 1 );
@@ -1710,7 +1789,7 @@ static bool TestOutLightmapStamp( rawLightmap_t *lm, int lightmapNum, outLightma
 		for ( int sx = 0; sx < lm->w; ++sx )
 		{
 			/* get luxel */
-			if ( lm->getBspLuxel( lightmapNum, sx, sy )[ 0 ] < 0 ) {
+			if ( !lightCacheActive && lm->getBspLuxel( lightmapNum, sx, sy )[ 0 ] < 0 ) {
 				continue;
 			}
 
@@ -1810,7 +1889,8 @@ static void FindOutLightmaps( rawLightmap_t *lm, bool fastAllocate ){
 		}
 
 		/* if this is a styled lightmap, try some normalized locations first */
-		ok = false;
+		ok = LightCachePlacement( lm, i, x, y );
+		if ( ok ) olm = &outLightmaps[i];
 		if ( lightmapNum > 0 && outLightmaps != nullptr ) {
 			/* loop twice */
 			for ( j = 0; j < 2; ++j )
@@ -2027,15 +2107,33 @@ static void FindOutLightmaps( rawLightmap_t *lm, bool fastAllocate ){
 			xMax = lm->w;
 			yMax = lm->h;
 		}
+		const bool cachedPixels = lightmapNum == 0 && LightCacheRestoreOutputLightmap( lm );
+		if ( !cachedPixels && lightCacheActive && LightCachePageCount() ) {
+			// Erase the old chart, including pixels that become occluded after
+			// relighting, before stamping its replacement over a cached page.
+			for ( int row = 0; row < yMax; ++row )
+				std::fill_n( olm->bspLightBytes + ( row + lm->lightmapY[lightmapNum] ) * olm->customWidth +
+					lm->lightmapX[lightmapNum], xMax, Vector3b( 0 ) );
+		}
 
 		/* mark the bits used */
 		for ( y = 0; y < yMax; ++y )
 		{
 			for ( x = 0; x < xMax; ++x )
 			{
+				if ( cachedPixels ) {
+					bit_enable( olm->lightBits, ( y + lm->lightmapY[lightmapNum] ) * olm->customWidth + x + lm->lightmapX[lightmapNum] );
+					--olm->freeLuxels;
+					continue;
+				}
 				/* get luxel */
 				const Vector3& luxel = lm->getBspLuxel( lightmapNum, x, y );
 				if ( luxel[ 0 ] < 0 && !lm->solid[ lightmapNum ] ) {
+					// Reserve the entire chart so later edits cannot change its slot.
+					if ( lightCacheActive ) {
+						bit_enable( olm->lightBits, ( y + lm->lightmapY[lightmapNum] ) * olm->customWidth + x + lm->lightmapX[lightmapNum] );
+						--olm->freeLuxels;
+					}
 					continue;
 				}
 				Vector3 color;
@@ -2298,6 +2396,8 @@ void StoreSurfaceLightmaps( bool fastAllocate, bool storeForReal ){
 	{
 		/* get lightmap */
 		lm = &rawLightmaps[ i ];
+
+		if ( LightCacheRestoreOutputLightmap( lm ) ) { numUsed += lm->used; continue; }
 
 		/* walk individual lightmaps */
 		for ( lightmapNum = 0; lightmapNum < MAX_LIGHTMAPS; ++lightmapNum )
@@ -2842,6 +2942,17 @@ void StoreSurfaceLightmaps( bool fastAllocate, bool storeForReal ){
 		numOutLightmaps = 0;
 		numBSPLightmaps = 0;
 		numExtLightmaps = 0;
+		// Recreate the cached pages and stamp into the original rectangles.
+		// Geometry/style changes are rejected before this path is entered.
+		const int cachedPages = LightCachePageCount();
+		if ( cachedPages > 0 ) {
+			outLightmaps = safe_malloc( cachedPages * sizeof( outLightmap_t ) );
+			for ( int page = 0; page < cachedPages; ++page ) {
+				SetupOutLightmap( &rawLightmaps[0], &outLightmaps[page] );
+				LightCacheRestoreOutputPage( page, outLightmaps[page].bspLightBytes );
+			}
+			numOutLightmaps = cachedPages;
+		}
 
 		/* find output lightmap */
 		for ( i = 0; i < numRawLightmaps; ++i )
@@ -3077,7 +3188,7 @@ void StoreSurfaceLightmaps( bool fastAllocate, bool storeForReal ){
 
 			/* store vertex colors */
 			dv = &bspDrawVerts[ ds.firstVert ];
-			for ( j = 0; j < ds.numVerts; ++j )
+			if ( !LightCacheRestoreVertexColors( i ) ) for ( j = 0; j < ds.numVerts; ++j )
 			{
 				/* walk lightmaps */
 				for ( lightmapNum = 0; lightmapNum < MAX_LIGHTMAPS; ++lightmapNum )

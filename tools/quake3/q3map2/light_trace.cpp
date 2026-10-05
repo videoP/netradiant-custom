@@ -30,6 +30,16 @@
 
 /* dependencies */
 #include "q3map2.h"
+#include "light_incremental.h"
+#include "lightcacheformat.h"
+#include "lightcachecompression.h"
+#include <filesystem>
+#include <fstream>
+#include <unordered_map>
+#include <vector>
+#ifdef WIN32
+#include <windows.h>
+#endif
 
 
 #define MAX_NODE_ITEMS          5
@@ -1062,6 +1072,267 @@ static void PopulateTraceNodes(){
 
    ------------------------------------------------------------------------------- */
 
+namespace {
+// Store the finished, pointer-free tracer rather than its temporary windings.
+// Nodes omit construction bounds; triangle edges are reconstructed exactly.
+struct TraceCacheHeader {
+	uint64_t magic = 0x3245434152544c51ULL; // QLTRACE2 (compressed payload)
+	uint64_t key{}, shaders{}, payload{}, checksum{};
+	uint64_t infos{}, triangles{}, nodes{}, items{};
+	int head{}, skybox{}, depth{}, leafs{};
+};
+struct CachedTraceInfo { int shader, surface, castShadows, skipGrid; };
+struct CachedTraceTriangle { traceVert_t v[3]; int info; };
+struct CachedTraceNode {
+	int type;
+	Plane3f plane;
+	int children[2], numItems;
+	uint64_t firstItem;
+};
+struct TraceHash {
+	uint64_t value = 14695981039346656037ULL;
+	void bytes( const void *data, size_t size ) {
+		for ( auto p = static_cast<const byte*>( data ); size; --size, ++p ) value = ( value ^ *p ) * 1099511628211ULL;
+	}
+};
+std::vector<int> cachedTraceItems;
+TraceHash traceModelInputs;
+bool traceInputsPrepared;
+uint64_t traceHeaderChecksum( TraceCacheHeader header ) {
+	header.checksum = 0;
+	return LightCacheChecksum( &header, sizeof( header ) );
+}
+std::vector<const shaderInfo_t*> traceCacheShaders( TraceHash& hash ) {
+	std::vector<const shaderInfo_t*> result;
+	for ( const shaderInfo_t& si : shaderInfo ) {
+		result.push_back( &si );
+		hash.bytes( si.shader.c_str(), strlen( si.shader.c_str() ) + 1 );
+		hash.bytes( &si.compileFlags, sizeof( si.compileFlags ) );
+	}
+	return result;
+}
+
+bool loadTraceCache() {
+	if ( !LightCacheReusable() ) return false;
+	std::ifstream file( LightCacheTraceFile(), std::ios::binary | std::ios::ate );
+	if ( !file ) return false;
+	const auto length = file.tellg();
+	file.seekg( 0 );
+	TraceCacheHeader header;
+	if ( !file.read( reinterpret_cast<char*>( &header ), sizeof( header ) ) ||
+	     ( header.magic != TraceCacheHeader{}.magic && header.magic != 0x3145434152544c51ULL ) ||
+	     header.checksum != traceHeaderChecksum( header ) ||
+	     header.key != LightCacheTraceKey() ) return false;
+	TraceHash shaderHash;
+	const auto shaders = traceCacheShaders( shaderHash );
+	if ( header.shaders != shaderHash.value || header.infos > INT_MAX || header.triangles > INT_MAX ||
+	     header.nodes > INT_MAX || header.items > INT_MAX || header.nodes == 0 ||
+	     header.head < 0 || uint64_t( header.head ) >= header.nodes ||
+	     header.skybox < 0 || uint64_t( header.skybox ) >= header.nodes ) return false;
+	const uint64_t expected = header.infos * sizeof( CachedTraceInfo ) +
+		header.triangles * sizeof( CachedTraceTriangle ) + header.nodes * sizeof( CachedTraceNode ) + header.items * sizeof( int );
+	if ( length < 0 ) return false;
+	LightCacheReader reader( file, uint64_t( length ), expected, header.magic == TraceCacheHeader{}.magic );
+	if ( !reader ) return false;
+	TraceHash payload;
+	auto block = [&]( void *data, size_t size ) {
+		if ( !reader.read( data, size ) ) return false;
+		payload.bytes( data, size );
+		return true;
+	};
+	// Stage everything privately. Invalid cache data cannot leave a partial
+	// tracer installed before the normal construction path takes over.
+	std::vector<traceInfo_t> infos( size_t( header.infos ) );
+	for ( auto& info : infos ) {
+		CachedTraceInfo stored;
+		if ( !block( &stored, sizeof( stored ) ) || stored.shader < 0 ||
+		     size_t( stored.shader ) >= shaders.size() || ( stored.skipGrid != 0 && stored.skipGrid != 1 ) ) return false;
+		info = { shaders[stored.shader], stored.surface, stored.castShadows, bool( stored.skipGrid ) };
+	}
+	std::vector<traceTriangle_t> triangles( size_t( header.triangles ) );
+	std::vector<CachedTraceTriangle> batch( 16384 );
+	for ( size_t first = 0; first < triangles.size(); ) {
+		const size_t count = std::min( batch.size(), triangles.size() - first );
+		if ( !block( batch.data(), count * sizeof( batch[0] ) ) ) return false;
+		for ( size_t i = 0; i < count; ++i ) {
+			const auto& stored = batch[i];
+			if ( stored.info < 0 || uint64_t( stored.info ) >= header.infos ) return false;
+			auto& triangle = triangles[first + i];
+			std::copy( std::begin( stored.v ), std::end( stored.v ), triangle.v );
+			triangle.infoNum = stored.info;
+			triangle.edge1 = triangle.v[1].xyz - triangle.v[0].xyz;
+			triangle.edge2 = triangle.v[2].xyz - triangle.v[0].xyz;
+		}
+		first += count;
+	}
+	std::vector<CachedTraceNode> nodes( size_t( header.nodes ) );
+	std::vector<int> items( size_t( header.items ) );
+	if ( !block( nodes.data(), nodes.size() * sizeof( nodes[0] ) ) ||
+	     !block( items.data(), items.size() * sizeof( items[0] ) ) || !reader.finish() || payload.value != header.payload ) return false;
+	std::vector<int> depths( nodes.size() );
+	for ( size_t i = 0; i < nodes.size(); ++i ) {
+		const auto& node = nodes[i];
+		if ( node.type < TRACE_LEAF_SOLID || node.type > ePlaneNonAxial || node.numItems < 0 ) return false;
+		if ( node.type >= 0 ) {
+			for ( int child : node.children ) {
+				if ( child <= int( i ) || size_t( child ) >= nodes.size() ) return false;
+				depths[child] = std::max( depths[child], depths[i] + 1 );
+				if ( depths[child] > 256 ) return false;
+			}
+		}
+		else if ( node.firstItem > header.items || uint64_t( node.numItems ) > header.items - node.firstItem ) return false;
+	}
+	for ( int item : items ) if ( item < 0 || uint64_t( item ) >= header.triangles ) return false;
+	traceInfos = safe_malloc( infos.size() * sizeof( infos[0] ) );
+	memcpy( traceInfos, infos.data(), infos.size() * sizeof( infos[0] ) );
+	traceTriangles = safe_malloc( triangles.size() * sizeof( triangles[0] ) );
+	memcpy( traceTriangles, triangles.data(), triangles.size() * sizeof( triangles[0] ) );
+	traceNodes = safe_calloc( nodes.size() * sizeof( traceNode_t ) );
+	cachedTraceItems = std::move( items );
+	for ( size_t i = 0; i < nodes.size(); ++i ) {
+		const auto& stored = nodes[i];
+		auto& node = traceNodes[i];
+		node.type = stored.type; node.plane = stored.plane;
+		std::copy( std::begin( stored.children ), std::end( stored.children ), node.children );
+		node.numItems = stored.numItems;
+		if ( node.type < 0 && node.numItems ) node.items = cachedTraceItems.data() + stored.firstItem;
+	}
+	numTraceInfos = maxTraceInfos = int( header.infos );
+	numTraceTriangles = maxTraceTriangles = int( header.triangles );
+	numTraceNodes = maxTraceNodes = int( header.nodes );
+	headNodeNum = header.head; skyboxNodeNum = header.skybox;
+	maxTraceDepth = header.depth; numTraceLeafNodes = header.leafs;
+	Sys_Printf( "Trace cache: reused %d triangles, %d nodes\n", numTraceTriangles, numTraceNodes );
+	return true;
+}
+
+void saveTraceCache() {
+	if ( !lightCacheActive || !LightCacheTraceEligible() ) return;
+	TraceCacheHeader header;
+	header.key = LightCacheTraceKey();
+	TraceHash shaderHash;
+	const auto shaders = traceCacheShaders( shaderHash );
+	header.shaders = shaderHash.value;
+	std::unordered_map<const shaderInfo_t*, int> shaderIndices;
+	for ( size_t i = 0; i < shaders.size(); ++i ) shaderIndices[shaders[i]] = int( i );
+	std::vector<CachedTraceInfo> infos;
+	for ( int i = 0; i < numTraceInfos; ++i ) {
+		const auto& info = traceInfos[i];
+		const auto it = shaderIndices.find( info.si );
+		if ( it == shaderIndices.end() ) return;
+		infos.push_back( { it->second, info.surfaceNum, info.castShadows, int( info.skipGrid ) } );
+	}
+	std::vector<CachedTraceNode> nodes;
+	std::vector<int> items;
+	nodes.reserve( numTraceNodes );
+	for ( int i = 0; i < numTraceNodes; ++i ) {
+		const auto& node = traceNodes[i];
+		CachedTraceNode stored{};
+		stored.type = node.type; stored.plane = node.plane;
+		std::copy( std::begin( node.children ), std::end( node.children ), stored.children );
+		stored.numItems = node.numItems; stored.firstItem = items.size();
+		if ( node.type < 0 && node.numItems ) items.insert( items.end(), node.items, node.items + node.numItems );
+		nodes.push_back( stored );
+	}
+	header.infos = infos.size(); header.triangles = numTraceTriangles;
+	header.nodes = nodes.size(); header.items = items.size();
+	header.head = headNodeNum; header.skybox = skyboxNodeNum;
+	header.depth = maxTraceDepth; header.leafs = numTraceLeafNodes;
+	const std::string temporary = std::string( LightCacheTraceFile() ) + ".tmp";
+	std::ofstream file( temporary, std::ios::binary | std::ios::trunc );
+	file.write( reinterpret_cast<const char*>( &header ), sizeof( header ) );
+	LightCacheWriter writer( file );
+	TraceHash payload;
+	auto block = [&]( const void *data, size_t size ) {
+		if ( !writer.write( data, size ) ) file.setstate( std::ios::badbit );
+		payload.bytes( data, size );
+	};
+	block( infos.data(), infos.size() * sizeof( infos[0] ) );
+	std::vector<CachedTraceTriangle> batch( 16384 );
+	for ( int first = 0; first < numTraceTriangles; ) {
+		const int count = std::min( int( batch.size() ), numTraceTriangles - first );
+		for ( int i = 0; i < count; ++i ) {
+			const auto& triangle = traceTriangles[first + i];
+			std::copy( std::begin( triangle.v ), std::end( triangle.v ), batch[i].v );
+			batch[i].info = triangle.infoNum;
+		}
+		block( batch.data(), count * sizeof( batch[0] ) );
+		first += count;
+	}
+	block( nodes.data(), nodes.size() * sizeof( nodes[0] ) );
+	block( items.data(), items.size() * sizeof( items[0] ) );
+	if ( !writer.finish() ) file.setstate( std::ios::badbit );
+	const auto storedBytes = file.tellp();
+	header.payload = payload.value; header.checksum = traceHeaderChecksum( header );
+	file.seekp( 0 ); file.write( reinterpret_cast<const char*>( &header ), sizeof( header ) );
+	file.close();
+	if ( !file ) { Sys_Warning( "Cannot write trace cache: %s\n", temporary.c_str() ); return; }
+	std::error_code error;
+#ifdef WIN32
+	if ( !MoveFileExA( temporary.c_str(), LightCacheTraceFile(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH ) )
+		error = std::error_code( GetLastError(), std::system_category() );
+#else
+	std::filesystem::rename( temporary, LightCacheTraceFile(), error );
+#endif
+	if ( error ) Sys_Warning( "Cannot publish trace cache: %s\n", error.message().c_str() );
+	else Sys_Printf( "Trace cache: saved %.1f MB compressed (%.1f MB uncompressed)\n", double( storedBytes ) / ( 1024 * 1024 ), double( sizeof( header ) + infos.size() * sizeof( infos[0] ) +
+		numTraceTriangles * sizeof( CachedTraceTriangle ) + nodes.size() * sizeof( nodes[0] ) + items.size() * sizeof( items[0] ) ) / ( 1024 * 1024 ) );
+}
+}
+
+bool LightCacheTraceEligible() {
+	return traceInputsPrepared;
+}
+
+void LightCacheTraceInputs() {
+	// Load the same external casters as PopulateTraceNodes before validating
+	// the cache. Hash decoded meshes so changed model files invalidate both
+	// their shadow tree and cached lighting, even when their names stay fixed.
+	traceModelInputs = TraceHash{};
+	auto model = []( const char *name, int frame, int castShadows, const Matrix4& transform ) {
+		traceModelInputs.bytes( name, strlen( name ) + 1 );
+		traceModelInputs.bytes( &frame, sizeof( frame ) );
+		traceModelInputs.bytes( &castShadows, sizeof( castShadows ) );
+		traceModelInputs.bytes( &transform, sizeof( transform ) );
+		if ( name[0] == '*' ) return;
+		for ( const auto *mesh : LoadModelWalker( name, frame ) ) {
+			const char *shader = mesh->getShaderName();
+			traceModelInputs.bytes( shader, strlen( shader ) + 1 );
+			ShaderInfoForShaderNull( shader );
+			mesh->forEachFace( []( const Vector3 ( &xyz )[3], const Vector2 ( &st )[3] ) {
+				traceModelInputs.bytes( xyz, sizeof( xyz ) );
+				traceModelInputs.bytes( st, sizeof( st ) );
+			} );
+		}
+	};
+	for ( size_t i = 1; i < entities.size(); ++i ) {
+		const entity_t& entity = entities[i];
+		int castShadows = ENTITY_CAST_SHADOWS;
+		GetEntityShadowFlags( &entity, nullptr, &castShadows, nullptr );
+		if ( !castShadows ) continue;
+		const char *name = entity.valueForKey( "model" );
+		if ( name[0] && name[0] != '*' ) {
+			model( name, entity.intForKey( "_frame", "frame" ), castShadows, ModelGetTransform( entity ) );
+			continue; // external primary models skip model2 in PopulateTraceNodes
+		}
+		if ( name[0] == '*' ) {
+			const size_t index = atoi( name + 1 );
+			if ( index == 0 || index >= bspModels.size() ) continue;
+			model( name, 0, castShadows, matrix4_translation_for_vec3( entity.vectorForKey( "origin" ) ) );
+		}
+		name = entity.valueForKey( "model2" );
+		if ( name[0] == '*' ) {
+			const size_t index = atoi( name + 1 );
+			if ( index > 0 && index < bspModels.size() )
+				model( name, 0, castShadows, matrix4_translation_for_vec3( entity.vectorForKey( "origin" ) ) );
+		}
+		else if ( name[0] ) model( name, entity.intForKey( "_frame2" ), castShadows, ModelGetTransform( entity ) );
+	}
+	traceInputsPrepared = true;
+}
+
+std::uint64_t LightCacheTraceInputKey() { return traceModelInputs.value; }
+
 /*
    SetupTraceNodes() - ydnar
    creates a balanced bsp with axis-aligned splits for efficient raytracing
@@ -1074,6 +1345,8 @@ void SetupTraceNodes(){
 	/* find nodraw bit */
 	noDrawContentFlags = noDrawSurfaceFlags = noDrawCompileFlags = 0;
 	ApplySurfaceParm( "nodraw", &noDrawContentFlags, &noDrawSurfaceFlags, &noDrawCompileFlags );
+	if ( lightCacheActive && LightCacheTraceEligible() && loadTraceCache() ) return;
+	if ( lightCacheActive ) Sys_Printf( "Trace cache: building shadow geometry\n" );
 
 	/* create the baseline raytracing tree from the bsp tree */
 	headNodeNum = SetupTraceNodes_r( 0 );
@@ -1109,6 +1382,7 @@ void SetupTraceNodes(){
 	numTraceWindings = 0;
 	maxTraceWindings = 0;
 	deadWinding = -1;
+	LightCacheTimed( "trace cache writing", [&] { saveTraceCache(); } );
 
 	/* debug code: write out trace triangles to an alias obj file */
 	#if 0

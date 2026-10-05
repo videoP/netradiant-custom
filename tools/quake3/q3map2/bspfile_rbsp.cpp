@@ -31,6 +31,10 @@
 /* dependencies */
 #include "q3map2.h"
 #include "bspfile_abstract.h"
+#include "light_incremental.h"
+#include "lightcacheformat.h"
+#include <array>
+#include <unordered_map>
 #include <ctime>
 
 
@@ -101,6 +105,14 @@ static void AddLightGridLumps( FILE *file, rbspHeader_t& header ){
 	const size_t maxGridPoints = std::min( bspGridPoints.size(), size_t( MAX_MAP_GRID ) );
 	std::vector<bspGridPoint_t> gridPoints;
 	std::vector<unsigned short> gridArray( bspGridPoints.size() );
+	using GridKey = std::array<byte, sizeof( bspGridPoint_t )>;
+	struct GridHash {
+		size_t operator()( const GridKey& key ) const { return LightCacheChecksum( key.data(), key.size() ); }
+	};
+	// An exact input that previously matched an approximate twin will always
+	// choose that same first twin: later entries cannot precede it. Memoize
+	// that result while preserving the original greedy packing and lump bytes.
+	std::unordered_map<GridKey, unsigned short, GridHash> exactSamples;
 
 	/* for each bsp grid point, find an approximate twin */
 	Sys_Printf( "Storing lightgrid: %zu points\n", bspGridPoints.size() );
@@ -108,6 +120,14 @@ static void AddLightGridLumps( FILE *file, rbspHeader_t& header ){
 	{
 		/* get points */
 		const bspGridPoint_t& in = bspGridPoints[ i ];
+		decltype( exactSamples )::iterator exact;
+		if ( lightCacheRequested ) {
+			GridKey key;
+			memcpy( key.data(), &in, key.size() );
+			const auto [position, inserted] = exactSamples.try_emplace( key );
+			if ( !inserted ) { gridArray[i] = position->second; continue; }
+			exact = position;
+		}
 
 		/* walk existing list */
 		size_t j;
@@ -156,6 +176,7 @@ static void AddLightGridLumps( FILE *file, rbspHeader_t& header ){
 
 		/* set sample index */
 		gridArray[ i ] = (unsigned short) j;
+		if ( lightCacheRequested ) exact->second = gridArray[i];
 
 		/* if no sample found, add a new one */
 		if ( j >= gridPoints.size() && gridPoints.size() < maxGridPoints ) {

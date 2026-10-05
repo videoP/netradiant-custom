@@ -22,6 +22,7 @@
 #include "math/vector.h"
 
 #include <functional>
+#include <string>
 
 class QWidget;
 
@@ -29,8 +30,9 @@ class QWidget;
 /// While it builds, a progress panel with a Cancel button is shown over \p parent; Cancel calls \p cancel.
 void LightSnap_start( const Vector3& origin, std::function<void()> redraw, QWidget* parent, std::function<void()> cancel );
 
-/// \brief Asks for a compiled .bsp and shows the lighting it holds (its lightmaps, or vertex colours), in place of a snapshot.
+/// \brief Loads .lightcache directly, or imports a compiled .bsp's lighting, in place of a snapshot.
 /// Same panel and callbacks as LightSnap_start. False if nothing was chosen or it could not start.
+/// Watches the chosen file and reloads after recompiles, keeping the previous preview until a new one is ready.
 bool LightSnap_startBSP( std::function<void()> redraw, QWidget* parent, std::function<void()> cancel );
 
 /// \brief Hides the snapshot and stops a running compile.
@@ -38,6 +40,11 @@ void LightSnap_stop();
 
 /// \brief Whether there is anything to draw: a pass has arrived.
 bool LightSnap_active();
+
+/// Values used by a lighting comparison capture. The source path is empty for a local snapshot.
+float LightSnap_previewGamma();
+int LightSnap_brightnessScale();
+std::string LightSnap_sourcePath();
 
 /// \brief Draws the snapshot into the camera view, over the scene already drawn. Needs the camera's matrices loaded.
 void LightSnap_draw( const Matrix4& modelview, const Matrix4& projection );

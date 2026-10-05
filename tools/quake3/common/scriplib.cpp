@@ -68,6 +68,7 @@ bool tokenready;                     // only true if UnGetToken was just called
  */
 static bool AddScriptToStack( const char *filename, int index, bool verbose ){
 	if ( MemBuffer buffer = vfsLoadFile( filename, index, true ) ) {
+		if ( scriptLoadObserver ) scriptLoadObserver( filename, buffer.data(), buffer.size() );
 		if( verbose ){
 			if ( index > 0 )
 				Sys_Printf( "entering %s (%d)\n", filename, index + 1 );

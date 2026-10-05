@@ -965,6 +965,10 @@ void create_view_menu( QMenuBar *menubar, MainFrame::EViewStyle style ){
 		submenu->addSeparator();
 		create_menu_item_with_mnemonic( submenu, "Far Clip Plane In", "CubicClipZoomIn" );
 		create_menu_item_with_mnemonic( submenu, "Far Clip Plane Out", "CubicClipZoomOut" );
+		if ( !string_equal( g_pGameDescription->mGameType.c_str(), "doom3" ) ) {
+			submenu->addSeparator();
+			create_menu_item_with_mnemonic( submenu, "Export Lighting Comparison...", "CaptureLightingComparison" );
+		}
 		submenu->addSeparator();
 		create_menu_item_with_mnemonic( submenu, "Next leak spot", "NextLeakSpot" );
 		create_menu_item_with_mnemonic( submenu, "Previous leak spot", "PrevLeakSpot" );
@@ -2163,4 +2167,3 @@ void MainFrame_Destroy(){
 	g_patchCount.setCountChangedCallback( Callback<void()>() );
 	g_brushCount.setCountChangedCallback( Callback<void()>() );
 }
-

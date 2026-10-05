@@ -140,11 +140,7 @@ void put( std::vector<byte>& out, const T& value ){
    WriteLightSnapshot()
    \p pass counts the lighting passes done: 0 is direct light, n is after n bounces.
  */
-void WriteLightSnapshot( const char *path, int pass, bool final ){
-	if ( strEmptyOrNull( path ) ) {
-		return;
-	}
-
+std::vector<byte> CreateLightSnapshot( int pass, bool final ){
 	std::vector<SnapSurface> surfaces;
 	std::vector<std::string> shaders;
 	std::vector<int> shaderRemap( bspShaders.size(), -1 );
@@ -223,6 +219,12 @@ void WriteLightSnapshot( const char *path, int pass, bool final ){
 		}
 	}
 
+	return out;
+}
+
+void WriteLightSnapshot( const char *path, int pass, bool final ){
+	if ( strEmptyOrNull( path ) ) return;
+	const std::vector<byte> out = CreateLightSnapshot( pass, final );
 	/* the viewer polls this file: it must never see half of it */
 	const std::string temporary = std::string( path ) + ".tmp";
 	if ( FILE* file = fopen( temporary.c_str(), "wb" ) ) {
@@ -235,7 +237,8 @@ void WriteLightSnapshot( const char *path, int pass, bool final ){
 				std::filesystem::remove( path, error );
 				std::filesystem::rename( temporary, path, error );
 			}
-			Sys_Printf( "Light snapshot (pass %d%s) written: %zu surfaces, %u lightmaps\n", pass, final ? ", final" : "", surfaces.size(), numLightmaps );
+			if ( error ) Sys_Warning( "Cannot publish light snapshot: %s\n", error.message().c_str() );
+			else Sys_Printf( "Light snapshot (pass %d%s) written: %zu bytes\n", pass, final ? ", final" : "", out.size() );
 		}
 	}
 	else {

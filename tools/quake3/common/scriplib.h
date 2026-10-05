@@ -28,6 +28,9 @@
 extern char token[MAXTOKEN];
 extern int scriptline;
 
+// Optional input observer, used to invalidate compiler caches on script changes.
+inline void ( *scriptLoadObserver )( const char*, const void*, size_t ) = nullptr;
+
 /// \param[in] index -1: \p filename is absolute path
 /// \param[in] index >= 0: \p filename is relative path in VSF, Nth occurrence of file
 /// \return true on success
