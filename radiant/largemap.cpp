@@ -27,6 +27,7 @@ LatchedBool g_largemap_lazyComponents( false, "Vertex editing data on demand" );
 /* not latched: these are only ever read when a build command is assembled */
 bool g_largemap_cullGrid = false;
 bool g_largemap_tjGrid = false;
+int g_largemap_reserveThreads = 0;
 
 /* not latched either: read every frame by the simulated lights */
 int g_largemap_simLightsMax = 4096;
@@ -177,6 +178,15 @@ void LargeMap_constructPreferences( PreferencesPage& page ){
 	    "Like the option above this is a q3map2 command line switch rather than a\n"
 	    "setting of the editor, and an older q3map2 will ignore it with a warning."
 	);
+	page.appendSpinner(
+	    "Reserve CPU threads", g_largemap_reserveThreads, 0, 63
+	)->setToolTip(
+	    "Leave this many logical CPU threads available for Radiant and other work\n"
+	    "while q3map2 compiles. For example, on a 16-thread CPU, setting this to 2\n"
+	    "runs q3map2 with at most 14 threads. The count is applied to every q3map2\n"
+	    "build step, including BSP, VIS, and lighting. Zero keeps q3map2's automatic\n"
+	    "thread count. Takes effect on the next compile."
+	);
 
 	page.appendSpinner(
 	    "Simulated lights: most lights in view", g_largemap_simLightsMax, 64, 16384
@@ -299,6 +309,11 @@ void LargeMap_Construct(){
 	    "LargeMapTJGrid",
 	    BoolImportStringCaller( g_largemap_tjGrid ),
 	    BoolExportStringCaller( g_largemap_tjGrid )
+	);
+	GlobalPreferenceSystem().registerPreference(
+	    "LargeMapReserveThreads",
+	    IntImportStringCaller( g_largemap_reserveThreads ),
+	    IntExportStringCaller( g_largemap_reserveThreads )
 	);
 	GlobalPreferenceSystem().registerPreference(
 	    "LargeMapSimLightsCap",

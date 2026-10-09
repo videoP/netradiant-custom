@@ -109,6 +109,13 @@ extern bool g_largemap_cullGrid;
  */
 extern bool g_largemap_tjGrid;
 
+/*! \brief Logical CPU threads to leave available while q3map2 is compiling.
+
+    Zero leaves q3map2's automatic thread count unchanged. A positive value
+    adds an explicit -threads count to every q3map2 build command.
+ */
+extern int g_largemap_reserveThreads;
+
 /*! \brief Most lights the simulated-lights view considers at once.
 
     Every light that reaches the view is used up to this; past it the ones

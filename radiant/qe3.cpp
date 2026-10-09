@@ -38,8 +38,10 @@
 
 #include "ifilesystem.h"
 
+#include <algorithm>
 #include <QWidget>
 #include <QMessageBox>
+#include <QThread>
 
 #include "stream/textfilestream.h"
 #include "commandlib.h"
@@ -166,6 +168,12 @@ void build_init_variables(){
 		largeMapFlags << " -cullgrid";
 	if ( g_largemap_tjGrid )
 		largeMapFlags << " -tjgrid";
+	if ( g_largemap_reserveThreads > 0 ) {
+		const int detectedThreads = QThread::idealThreadCount();
+		const int availableThreads = detectedThreads > 0 ? detectedThreads : 1;
+		const int q3map2Threads = std::clamp( availableThreads - g_largemap_reserveThreads, 1, 64 );
+		largeMapFlags << " -threads " << q3map2Threads;
+	}
 	build_set_variable( "LargeMapFlags", largeMapFlags );
 	build_set_variable( "MonitorAddress", ( g_WatchBSP_Enabled ) ? RADIANT_MONITOR_ADDRESS : "" );
 	build_set_variable( "GameName", gamename_get() );

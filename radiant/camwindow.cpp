@@ -1971,6 +1971,8 @@ ToggleItem g_simshadows_item{ BoolExportCaller( g_simShadows_enabled ) };
 
 bool g_lightSnap_enabled = false;
 ToggleItem g_lightsnap_item{ BoolExportCaller( g_lightSnap_enabled ) };
+bool g_compiledLighting_enabled = false;
+ToggleItem g_compiledLighting_item{ BoolExportCaller( g_compiledLighting_enabled ) };
 
 /// Both are a shading of the textured view: with nothing textured on screen a button would appear to do nothing.
 void SimLights_showTextured(){
@@ -2017,6 +2019,8 @@ void LightSnapToggle(){
 	g_lightSnap_enabled ^= 1;
 	g_lightsnap_item.update();
 	if ( g_lightSnap_enabled && g_camwnd != 0 ) {
+		g_compiledLighting_enabled = false;
+		g_compiledLighting_item.update();
 		SimLights_showTextured();
 		LightSnap_start( Camera_getOrigin( *g_camwnd ), [](){
 			if ( g_camwnd != 0 ) {
@@ -2036,7 +2040,32 @@ void LightSnapToggle(){
 	}
 }
 
-/// Shows the lighting a compiled .bsp holds, in the snapshot's place: it turns the snapshot on, and the same button turns it off.
+/// Show or hide a loaded BSP/cache preview without unloading it.
+void CompiledLightingToggle(){
+	const bool show = !g_compiledLighting_enabled;
+	if ( show && !LightSnap_hasCompiledSource() ) {
+		g_compiledLighting_item.update();
+		globalOutputStream() << "Load a lighting cache or BSP before showing its preview.\n";
+		return;
+	}
+	g_compiledLighting_enabled = show;
+	g_compiledLighting_item.update();
+	LightSnap_setPreviewVisible( show );
+	if ( g_camwnd != nullptr ) {
+		CamWnd_Update( *g_camwnd );
+	}
+}
+
+void CancelCompiledLighting(){
+	g_compiledLighting_enabled = false;
+	g_compiledLighting_item.update();
+	LightSnap_stop();
+	if ( g_camwnd != nullptr ) {
+		CamWnd_Update( *g_camwnd );
+	}
+}
+
+/// Load a compiled .bsp/cache. Its separate visibility toggle keeps the loaded preview available when hidden.
 void LightLoadBSP(){
 	if ( g_camwnd == 0 ) {
 		return;
@@ -2047,19 +2076,26 @@ void LightLoadBSP(){
 			CamWnd_Update( *g_camwnd );
 		}
 	}, CamWnd_getWidget( *g_camwnd ), [](){
-		if ( g_lightSnap_enabled ) {
-			LightSnapToggle();
-		}
+		CancelCompiledLighting();
 	} ) ) {
-		g_lightSnap_enabled = true;
-		g_lightsnap_item.update();
+		g_compiledLighting_enabled = true;
+		g_compiledLighting_item.update();
+		LightSnap_setPreviewVisible( true );
+		if ( g_lightSnap_enabled ) {
+			g_lightSnap_enabled = false;
+			g_lightsnap_item.update();
+		}
 		CamWnd_Update( *g_camwnd );
+	}
+	else if ( !LightSnap_hasCompiledSource() && g_compiledLighting_enabled ) {
+		g_compiledLighting_enabled = false;
+		g_compiledLighting_item.update();
 	}
 }
 
 /// Save the camera's real GL output and the commands needed to reproduce its view in TaystJK.
 void CaptureLightingComparison(){
-	if ( g_camwnd == nullptr || !g_lightSnap_enabled || !LightSnap_active() ) {
+	if ( g_camwnd == nullptr || ( !g_lightSnap_enabled && !g_compiledLighting_enabled ) || !LightSnap_active() ) {
 		QMessageBox::information( nullptr, "Lighting comparison", "Load a lighting cache or BSP in the camera and wait for its preview to appear first." );
 		return;
 	}
@@ -2302,7 +2338,7 @@ void CamWnd::Cam_Draw(){
 		}
 	}
 
-	if ( g_lightSnap_enabled && ( m_Camera.draw_mode == cd_texture || m_Camera.draw_mode == cd_texture_plus_wire ) ) {
+	if ( ( g_lightSnap_enabled || g_compiledLighting_enabled ) && ( m_Camera.draw_mode == cd_texture || m_Camera.draw_mode == cd_texture_plus_wire ) ) {
 		LightSnap_draw( m_Camera.modelview, m_Camera.projection );
 	}
 
@@ -2380,7 +2416,7 @@ void CamWnd::Cam_Draw(){
 		}
 	}
 
-	if ( g_lightSnap_enabled && LightSnap_status()[0] != '\0' ) {
+	if ( ( g_lightSnap_enabled || g_compiledLighting_enabled ) && LightSnap_status()[0] != '\0' ) {
 		const float lineHeight = GlobalOpenGL().m_font->getPixelHeight();
 		FrameStats_drawStringOutline( 1.0f, lineHeight, LightSnap_status() );
 		gl().glColor3f( 1, 1, 1 );
@@ -2577,7 +2613,8 @@ void CamWnd_constructToolbar( QToolBar* toolbar ){
 	if ( g_pGameDescription->mGameType != "doom3" ) {
 		toolbar_append_toggle_button( toolbar, "Light preview: simulated map lights (light entities, q3map_surfacelight faces, q3map_sun) with shadows from the nearest lights", "view_simlights.png", "ToggleSimLights" );
 		toolbar_append_toggle_button( toolbar, "Light snapshot: q3map2 lights the map around the camera, bounce included, and each pass is shown as it finishes", "view_lightsnap.png", "ToggleLightSnap" );
-			toolbar_append_button( toolbar, "Load a lighting cache (.lightcache) or BSP into the camera view and automatically refresh it after recompiles; the snapshot button above clears it", "view_lightbsp.png", "LoadBSPLighting" );
+		toolbar_append_button( toolbar, "Load a lighting cache (.lightcache) or BSP into the camera view; use the adjacent toggle to hide or show the loaded preview", "file_open.png", "LoadBSPLighting" );
+		toolbar_append_toggle_button( toolbar, "Show or hide the loaded lighting cache/BSP preview. Hiding keeps it loaded so you can turn it back on without reloading.", "view_lightbsp.png", "ToggleCompiledLightingPreview" );
 	}
 }
 
@@ -2862,6 +2899,7 @@ void CamWnd_Construct(){
 	GlobalToggles_insert( "ShowWorkzone3d", makeCallbackF( ShowWorkzone3dToggle ), ToggleItem::AddCallbackCaller( g_show_workzone3d ) );
 	GlobalToggles_insert( "ShowSize3d", makeCallbackF( ShowSize3dToggle ), ToggleItem::AddCallbackCaller( g_show_size3d ) );
 	GlobalToggles_insert( "ToggleLightSnap", makeCallbackF( LightSnapToggle ), ToggleItem::AddCallbackCaller( g_lightsnap_item ) );
+	GlobalToggles_insert( "ToggleCompiledLightingPreview", makeCallbackF( CompiledLightingToggle ), ToggleItem::AddCallbackCaller( g_compiledLighting_item ) );
 	GlobalCommands_insert( "LoadBSPLighting", makeCallbackF( LightLoadBSP ) );
 	GlobalCommands_insert( "CaptureLightingComparison", makeCallbackF( CaptureLightingComparison ) );
 	GlobalToggles_insert( "ToggleSimLights", makeCallbackF( SimLightsToggle ), ToggleItem::AddCallbackCaller( g_simlights_item ) );

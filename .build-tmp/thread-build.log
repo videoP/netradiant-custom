@@ -1,0 +1,45 @@
+dependencies checking disabled, good luck...
+g++ radiant/largemap.cpp   -MMD -W -Wall -Wcast-align -Wcast-qual -Wno-unused-parameter -Wno-unused-function -fno-strict-aliasing -O3 -mms-bitfields -std=c++20 -Wreorder -fno-exceptions -fno-rtti   -IC:/msys64/mingw64/bin/../include/libxml2 -IC:/msys64/mingw64/bin/../include -IC:/msys64/mingw64/bin/../include/glib-2.0 -IC:/msys64/mingw64/bin/../lib/glib-2.0/include -IC:/msys64/mingw64/bin/../include -DQT_WIDGETS_LIB -IC:/msys64/mingw64/bin/../include/QtWidgets -DQT_GUI_LIB -IC:/msys64/mingw64/bin/../include/QtGui -DQT_CORE_LIB -IC:/msys64/mingw64/bin/../include/QtCore -DQT_NO_KEYWORDS -DQT_SVG_LIB -IC:/msys64/mingw64/bin/../include/QtSvg -DQT_WIDGETS_LIB -IC:/msys64/mingw64/bin/../include/QtWidgets -DQT_GUI_LIB -IC:/msys64/mingw64/bin/../include/QtGui -DQT_CORE_LIB -IC:/msys64/mingw64/bin/../include/QtCore -DQT_NO_KEYWORDS  -Ilibs -Iinclude -DNDEBUG -DWIN32 -D_WIN32 -D_inline=inline -DRADIANT_VERSION="\"1.6.0n-git-525f874a\"" -DRADIANT_MAJOR_VERSION="\"6\"" -DRADIANT_MINOR_VERSION="\"0\"" -DRADIANT_ABOUTMSG="\"Custom build\"" -DQ3MAP_VERSION="\"2.5.17n-git-525f874a\"" -DRADIANT_EXECUTABLE="\"exe\""   -c -o radiant/largemap.o
+g++ radiant/simlights.cpp   -MMD -W -Wall -Wcast-align -Wcast-qual -Wno-unused-parameter -Wno-unused-function -fno-strict-aliasing -O3 -mms-bitfields -std=c++20 -Wreorder -fno-exceptions -fno-rtti   -IC:/msys64/mingw64/bin/../include/libxml2 -IC:/msys64/mingw64/bin/../include -IC:/msys64/mingw64/bin/../include/glib-2.0 -IC:/msys64/mingw64/bin/../lib/glib-2.0/include -IC:/msys64/mingw64/bin/../include -DQT_WIDGETS_LIB -IC:/msys64/mingw64/bin/../include/QtWidgets -DQT_GUI_LIB -IC:/msys64/mingw64/bin/../include/QtGui -DQT_CORE_LIB -IC:/msys64/mingw64/bin/../include/QtCore -DQT_NO_KEYWORDS -DQT_SVG_LIB -IC:/msys64/mingw64/bin/../include/QtSvg -DQT_WIDGETS_LIB -IC:/msys64/mingw64/bin/../include/QtWidgets -DQT_GUI_LIB -IC:/msys64/mingw64/bin/../include/QtGui -DQT_CORE_LIB -IC:/msys64/mingw64/bin/../include/QtCore -DQT_NO_KEYWORDS  -Ilibs -Iinclude -DNDEBUG -DWIN32 -D_WIN32 -D_inline=inline -DRADIANT_VERSION="\"1.6.0n-git-525f874a\"" -DRADIANT_MAJOR_VERSION="\"6\"" -DRADIANT_MINOR_VERSION="\"0\"" -DRADIANT_ABOUTMSG="\"Custom build\"" -DQ3MAP_VERSION="\"2.5.17n-git-525f874a\"" -DRADIANT_EXECUTABLE="\"exe\""   -c -o radiant/simlights.o
+radiant/largemap.cpp: In function 'void LargeMap_constructPreferences(PreferencesPage&)':
+radiant/largemap.cpp:181:27: error: no matching function for call to 'PreferencesPage::appendSpinner(const char [8], const char [20], int&, int, int)'
+  181 |         page.appendSpinner(
+      |         ~~~~~~~~~~~~~~~~~~^
+  182 |             "Compile", "Reserve CPU threads", g_largemap_reserveThreads, 0, 63
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  183 |         )->setToolTip(
+      |         ~                  
+  • there are 4 candidates
+In file included from radiant/largemap.h:12,
+                 from radiant/largemap.cpp:5:
+    • candidate 1: 'QWidget* PreferencesPage::appendSpinner(const char*, int, int, const IntImportCallback&, const IntExportCallback&)'
+      radiant/preferences.h:93:18:
+         93 |         QWidget* appendSpinner( const char* name, int lower, int upper, const IntImportCallback& importCallback, const IntExportCallback& exportCallback ){
+            |                  ^~~~~~~~~~~~~
+      • no known conversion for argument 4 from 'int' to 'const IntImportCallback&' {aka 'const Callback<void(int)>&'}
+        radiant/preferences.h:93:98:
+           93 |         QWidget* appendSpinner( const char* name, int lower, int upper, const IntImportCallback& importCallback, const IntExportCallback& exportCallback ){
+              |                                                                         ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+    • candidate 2: 'QWidget* PreferencesPage::appendSpinner(const char*, float&, double, double, int)'
+      radiant/preferences.h:99:18:
+         99 |         QWidget* appendSpinner( const char* name, float& data, double lower, double upper, int decimals = 2 ){
+            |                  ^~~~~~~~~~~~~
+      • no known conversion for argument 2 from 'const char [20]' to 'float&'
+        radiant/preferences.h:99:58:
+           99 |         QWidget* appendSpinner( const char* name, float& data, double lower, double upper, int decimals = 2 ){
+              |                                                   ~~~~~~~^~~~
+    • candidate 3: 'QWidget* PreferencesPage::appendSpinner(const char*, int&, int, int)'
+      radiant/preferences.h:90:18:
+         90 |         QWidget* appendSpinner( const char* name, int& data, int lower, int upper ){
+            |                  ^~~~~~~~~~~~~
+      • candidate expects 4 arguments, 5 provided
+    • candidate 4: 'QWidget* PreferencesPage::appendSpinner(const char*, double, double, const FloatImportCallback&, const FloatExportCallback&, int)'
+      radiant/preferences.h:96:18:
+         96 |         QWidget* appendSpinner( const char* name, double lower, double upper, const FloatImportCallback& importCallback, const FloatExportCallback& exportCallback, int decimals = 2 ){
+            |                  ^~~~~~~~~~~~~
+      • no known conversion for argument 2 from 'const char [20]' to 'double'
+        radiant/preferences.h:96:58:
+           96 |         QWidget* appendSpinner( const char* name, double lower, double upper, const FloatImportCallback& importCallback, const FloatExportCallback& exportCallback, int decimals = 2 ){
+              |                                                   ~~~~~~~^~~~~
+make: *** [Makefile:531: radiant/largemap.o] Error 1
+make: *** Waiting for unfinished jobs....

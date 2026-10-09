@@ -9,6 +9,7 @@
 
 #include "q3map2.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -30,21 +31,22 @@ struct SnapSurface
 {
 	unsigned shader;
 	int lightmapNum; // -1: by vertex colour
+	unsigned channel;
 	std::vector<SnapVert> verts;
 	std::vector<unsigned> indexes;
 };
 
-SnapVert snap_vert( const bspDrawVert_t& v ){
+SnapVert snap_vert( const bspDrawVert_t& v, unsigned channel ){
 	SnapVert out;
 	for ( int i = 0; i < 3; ++i ) {
 		out.xyz[i] = v.xyz[i];
 	}
 	out.st[0] = v.st[0];
 	out.st[1] = v.st[1];
-	out.lm[0] = v.lightmap[0][0];
-	out.lm[1] = v.lightmap[0][1];
+	out.lm[0] = v.lightmap[channel][0];
+	out.lm[1] = v.lightmap[channel][1];
 	for ( int i = 0; i < 4; ++i ) {
-		out.color[i] = v.color[0][i];
+		out.color[i] = v.color[channel][i];
 	}
 	return out;
 }
@@ -65,7 +67,7 @@ SnapVert snap_mix( const SnapVert& a, const SnapVert& b, const SnapVert& c, floa
 }
 
 /// The quadratic bezier a patch is made of, one 3x3 piece at a time.
-void tessellate_patch( const bspDrawSurface_t& ds, SnapSurface& out ){
+void tessellate_patch( const bspDrawSurface_t& ds, SnapSurface& out, unsigned channel ){
 	const int width = ds.patchWidth;
 	const int height = ds.patchHeight;
 	if ( width < 3 || height < 3 || ( width & 1 ) == 0 || ( height & 1 ) == 0 ) {
@@ -78,7 +80,7 @@ void tessellate_patch( const bspDrawSurface_t& ds, SnapSurface& out ){
 			SnapVert control[3][3];
 			for ( int y = 0; y < 3; ++y ) {
 				for ( int x = 0; x < 3; ++x ) {
-					control[y][x] = snap_vert( bspDrawVerts[ ds.firstVert + ( py + y ) * width + px + x ] );
+					control[y][x] = snap_vert( bspDrawVerts[ ds.firstVert + ( py + y ) * width + px + x ], channel );
 				}
 			}
 
@@ -144,6 +146,7 @@ std::vector<byte> CreateLightSnapshot( int pass, bool final ){
 	std::vector<SnapSurface> surfaces;
 	std::vector<std::string> shaders;
 	std::vector<int> shaderRemap( bspShaders.size(), -1 );
+	bool styledChannels = false;
 
 	for ( const bspDrawSurface_t& ds : bspDrawSurfaces ) {
 		if ( ds.shaderNum < 0 || size_t( ds.shaderNum ) >= bspShaders.size() ) {
@@ -159,31 +162,33 @@ std::vector<byte> CreateLightSnapshot( int pass, bool final ){
 			continue;
 		}
 
-		SnapSurface surface;
-		surface.lightmapNum = ds.lightmapNum[0] >= 0 ? ds.lightmapNum[0] : -1;
-
-		if ( ds.surfaceType == MST_PATCH ) {
-			tessellate_patch( ds, surface );
-		}
-		else {
-			for ( int i = 0; i < ds.numVerts; ++i ) {
-				surface.verts.push_back( snap_vert( bspDrawVerts[ ds.firstVert + i ] ) );
-			}
-			for ( int i = 0; i < ds.numIndexes; ++i ) {
-				surface.indexes.push_back( unsigned( bspDrawIndexes[ ds.firstIndex + i ] ) );
-			}
-		}
-		if ( surface.indexes.empty() ) {
-			continue;
-		}
-
 		int& remap = shaderRemap[ ds.shaderNum ];
 		if ( remap < 0 ) {
 			remap = int( shaders.size() );
 			shaders.emplace_back( shaderName );
 		}
-		surface.shader = unsigned( remap );
-		surfaces.push_back( std::move( surface ) );
+		for ( unsigned channel = 0; channel < MAX_LIGHTMAPS; ++channel ) {
+			if ( channel > 0 && !style_is_valid( ds.lightmapStyles[channel] ) && !style_is_valid( ds.vertexStyles[channel] ) ) continue;
+			SnapSurface surface;
+			surface.lightmapNum = ds.lightmapNum[channel] >= 0 ? ds.lightmapNum[channel] : -1;
+			surface.channel = channel;
+			if ( channel > 0 ) styledChannels = true;
+
+			if ( ds.surfaceType == MST_PATCH ) {
+				tessellate_patch( ds, surface, channel );
+			}
+			else {
+				for ( int i = 0; i < ds.numVerts; ++i ) {
+					surface.verts.push_back( snap_vert( bspDrawVerts[ ds.firstVert + i ], channel ) );
+				}
+				for ( int i = 0; i < ds.numIndexes; ++i ) {
+					surface.indexes.push_back( unsigned( bspDrawIndexes[ ds.firstIndex + i ] ) );
+				}
+			}
+			if ( surface.indexes.empty() ) continue;
+			surface.shader = unsigned( remap );
+			surfaces.push_back( std::move( surface ) );
+		}
 	}
 
 	const unsigned lmSize = unsigned( g_game->lightmapSize );
@@ -191,7 +196,7 @@ std::vector<byte> CreateLightSnapshot( int pass, bool final ){
 	const unsigned numLightmaps = externalLightmaps || pageBytes == 0 ? 0 : unsigned( bspLightBytes.size() / pageBytes );
 
 	std::vector<byte> out;
-	out.insert( out.end(), { 'L', 'S', 'N', '1' } );
+	out.insert( out.end(), { byte( 'L' ), byte( 'S' ), byte( 'N' ), byte( styledChannels ? '2' : '1' ) } );
 	put( out, unsigned( pass ) );
 	put( out, unsigned( final ? 1 : 0 ) );
 	put( out, lmSize );
@@ -209,6 +214,7 @@ std::vector<byte> CreateLightSnapshot( int pass, bool final ){
 	for ( const SnapSurface& surface : surfaces ) {
 		put( out, surface.shader );
 		put( out, int( surface.lightmapNum < int( numLightmaps ) ? surface.lightmapNum : -1 ) );
+		if ( styledChannels ) put( out, surface.channel );
 		put( out, unsigned( surface.verts.size() ) );
 		put( out, unsigned( surface.indexes.size() ) );
 		for ( const SnapVert& v : surface.verts ) {

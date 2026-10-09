@@ -1,0 +1,10 @@
+﻿NetRadiant Custom - Large Maps
+
+Features
+- Simulated Map Lights preview with dynamic-light and sun shadows.
+- Beer-Lambert water light absorption in q3map2.
+- q3map2 riverbed precomputation and steady-state river water baking for sailing rivers.
+- Large Maps performance options for loading, viewing, editing, and compiling.
+
+Bug fixes
+- Fixed 3D Ctrl+click face-selection highlighting with Batched static geometry enabled.

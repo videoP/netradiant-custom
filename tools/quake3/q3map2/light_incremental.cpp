@@ -59,8 +59,11 @@ bool fileHash( const char *name, Digest& digest ) {
 using Header = LightCacheHeader;
 struct Chart {
 	Digest dependencies{};
-	int w{}, h{}, sw{}, sh{}, page{}, x{}, y{}, used{};
-	std::vector<SuperLuxel> luxels;
+	int w{}, h{}, sw{}, sh{}, used{};
+	Array4<byte> styles{ LS_NORMAL, LS_NONE, LS_NONE, LS_NONE };
+	Array4<byte> solid{};
+	Array4<int> pages{ -1, -1, -1, -1 }, x{}, y{};
+	Array4<std::vector<SuperLuxel>> luxels;
 	std::vector<int> clusters;
 };
 struct Grid {
@@ -421,7 +424,7 @@ bool loadCache() {
 	const auto length = file.tellg(); file.seekg( 0 );
 	Header old;
 	cacheReason = "cache header is invalid or belongs to a different format";
-	if ( !read( file, old ) || ( old.magic != current.magic && old.magic != LightCacheLegacyMagic ) ||
+	if ( !read( file, old ) || old.magic != current.magic ||
 	     old.checksum != headerChecksum( old ) ) return false;
 	// A light-only invocation cannot repair geometry which the BSP stage has
 	// never seen. Stop before writing the BSP, even if settings also changed.
@@ -435,16 +438,17 @@ bool loadCache() {
 	if ( old.geometry != current.geometry || old.map != current.map ) return false;
 	cacheReason = "chart/grid layout changed or cache data is invalid";
 	if ( old.charts != current.charts || old.grid != current.grid ||
-	     old.pages > old.charts ) return false;
+	     old.pages > old.charts * MAX_LIGHTMAPS || old.pages > INT_MAX ) return false;
 	if ( length < 0 || old.previewOffset < sizeof( old ) || old.previewOffset > uint64_t( length ) ||
 	     old.previewSize != uint64_t( length ) - old.previewOffset ) return false;
-	const bool compressed = old.magic == current.magic;
-	uint64_t sampleBytes = grid.size() * sizeof( Grid ) + bspDrawVerts.size() * sizeof( Array4<Color4b> );
-	for ( int i = 0; i < numRawLightmaps; ++i ) {
-		const auto& lm = rawLightmaps[i];
-		sampleBytes += sizeof( Digest ) + sizeof( int ) * 8 + uint64_t( lm.sw ) * lm.sh * ( sizeof( SuperLuxel ) + sizeof( int ) );
-	}
-	LightCacheReader reader( file, old.previewOffset, sampleBytes, compressed );
+	file.seekg( sizeof( old ) );
+	LightCacheCompressedHeader samplesHeader;
+	if ( !read( file, samplesHeader ) || samplesHeader.magic != LightCacheCompressedHeader{}.magic ||
+	     old.previewOffset < sizeof( old ) + sizeof( samplesHeader ) ||
+	     samplesHeader.storedSize != old.previewOffset - sizeof( old ) - sizeof( samplesHeader ) ) return false;
+	file.seekg( sizeof( old ) );
+	const bool compressed = true;
+	LightCacheReader reader( file, old.previewOffset, samplesHeader.rawSize, compressed );
 	if ( !reader ) return false;
 	Hash payload;
 	auto block = [&]( void *data, size_t size ) {
@@ -458,27 +462,52 @@ bool loadCache() {
 	for ( int i = 0; i < numRawLightmaps; ++i ) {
 		Chart& chart = charts[i];
 		const rawLightmap_t& lm = rawLightmaps[i];
+		int dimensions[5];
 		if ( !block( &chart.dependencies, sizeof( chart.dependencies ) ) ||
-		     !block( &chart.w, sizeof( int ) * 8 ) ) { cacheReason = "truncated chart header"; return false; }
+		     !block( dimensions, sizeof( dimensions ) ) ||
+		     !block( chart.styles.data(), sizeof( chart.styles ) ) ||
+		     !block( chart.solid.data(), sizeof( chart.solid ) ) ||
+		     !block( chart.pages.data(), sizeof( chart.pages ) ) ||
+		     !block( chart.x.data(), sizeof( chart.x ) ) ||
+		     !block( chart.y.data(), sizeof( chart.y ) ) ) { cacheReason = "truncated chart header"; return false; }
+		chart.w = dimensions[0]; chart.h = dimensions[1]; chart.sw = dimensions[2]; chart.sh = dimensions[3]; chart.used = dimensions[4];
 		if ( chart.w != lm.w || chart.h != lm.h || chart.sw != lm.sw || chart.sh != lm.sh ) {
 			Sys_Printf( "Cache chart %d dimensions changed: %dx%d (%dx%d samples) -> %dx%d (%dx%d samples)\n",
 				i, chart.w, chart.h, chart.sw, chart.sh, lm.w, lm.h, lm.sw, lm.sh );
 			cacheReason = "chart dimensions changed";
 			return false;
 		}
-		if ( chart.used < 0 || chart.used > lm.w * lm.h || chart.page < 0 || uint64_t( chart.page ) >= old.pages || chart.x < 0 || chart.y < 0 ||
-		     chart.x > g_game->lightmapSize - lm.w || chart.y > g_game->lightmapSize - lm.h ) {
-			cacheReason = "invalid cached chart placement"; return false;
+		if ( chart.used < 0 || chart.used > lm.w * lm.h ) { cacheReason = "invalid cached chart size"; return false; }
+		std::set<byte> seenStyles;
+		for ( int channel = 0; channel < MAX_LIGHTMAPS; ++channel ) {
+			if ( chart.styles[channel] == LS_NONE ) {
+				if ( chart.pages[channel] != -1 ) { cacheReason = "invalid unused style placement"; return false; }
+				continue;
+			}
+			if ( !style_is_valid( chart.styles[channel] ) || chart.solid[channel] > 1 || !seenStyles.insert( chart.styles[channel] ).second ) {
+				cacheReason = "invalid cached style"; return false;
+			}
+			// Vertex-lit and twinned channels have no independent atlas rectangle.
+			const int width = chart.solid[channel] ? 1 : lm.w;
+			const int height = chart.solid[channel] ? 1 : lm.h;
+			if ( chart.pages[channel] != -1 ) {
+				if ( chart.pages[channel] < 0 || uint64_t( chart.pages[channel] ) >= old.pages || chart.x[channel] < 0 || chart.y[channel] < 0 ||
+				     chart.x[channel] > g_game->lightmapSize - width || chart.y[channel] > g_game->lightmapSize - height ) {
+					cacheReason = "invalid cached style or chart placement"; return false;
+				}
+				for ( int y = 0; y < height; ++y ) for ( int x = 0; x < width; ++x ) {
+					byte& used = occupied[chart.pages[channel]][( chart.y[channel] + y ) * g_game->lightmapSize + chart.x[channel] + x];
+					if ( used ) { cacheReason = "overlapping cached chart placements"; return false; }
+					used = 1;
+				}
+			}
+			chart.luxels[channel].resize( size_t( lm.sw ) * lm.sh );
+			if ( !block( chart.luxels[channel].data(), chart.luxels[channel].size() * sizeof( SuperLuxel ) ) ) {
+				cacheReason = "truncated chart samples"; return false;
+			}
 		}
-		for ( int y = 0; y < lm.h; ++y ) for ( int x = 0; x < lm.w; ++x ) {
-			byte& used = occupied[chart.page][( chart.y + y ) * g_game->lightmapSize + chart.x + x];
-			if ( used ) { cacheReason = "overlapping cached chart placements"; return false; }
-			used = 1;
-		}
-		chart.luxels.resize( size_t( lm.sw ) * lm.sh );
-		chart.clusters.resize( chart.luxels.size() );
-		if ( !block( chart.luxels.data(), chart.luxels.size() * sizeof( SuperLuxel ) ) ||
-		     !block( chart.clusters.data(), chart.clusters.size() * sizeof( int ) ) ) { cacheReason = "truncated chart samples"; return false; }
+		chart.clusters.resize( size_t( lm.sw ) * lm.sh );
+		if ( !block( chart.clusters.data(), chart.clusters.size() * sizeof( int ) ) ) { cacheReason = "truncated chart clusters"; return false; }
 	}
 	if ( !block( grid.data(), grid.size() * sizeof( Grid ) ) ) { cacheReason = "truncated grid samples"; return false; }
 	cachedVertexColors.resize( bspDrawVerts.size() );
@@ -509,7 +538,7 @@ bool loadCache() {
 	uint32_t previewHeader[7];
 	const size_t pageBytes = size_t( g_game->lightmapSize ) * g_game->lightmapSize * 3;
 	if ( previewBytes < sizeof( previewHeader ) || !previewBlock( previewHeader, sizeof( previewHeader ) ) ||
-	     memcmp( previewHeader, "LSN1", 4 ) || previewHeader[3] != uint32_t( g_game->lightmapSize ) ||
+	     ( memcmp( previewHeader, "LSN1", 4 ) && memcmp( previewHeader, "LSN2", 4 ) ) || previewHeader[3] != uint32_t( g_game->lightmapSize ) ||
 	     previewHeader[4] != old.pages || previewBytes - sizeof( previewHeader ) < old.pages * pageBytes ) {
 		cacheReason = "invalid cached output pages"; return false;
 	}
@@ -633,8 +662,6 @@ void LightCachePrepare() {
 		unsupported = "deluxe/external/approximated/filled/trisoup lightmaps require a full build";
 	else if ( dirty || floodlighty || lightRandomSamples )
 		unsupported = "dirt, floodlight or random samples require a full build";
-	for ( const light_t& light : lights )
-		if ( light.style != LS_NORMAL ) unsupported = "styled lights require a full build";
 	for ( const rawLightmap_t& lm : Span( rawLightmaps, numRawLightmaps ) ) {
 		if ( lm.customWidth != g_game->lightmapSize || lm.customHeight != g_game->lightmapSize )
 			unsupported = "custom lightmap pages require a full build";
@@ -853,7 +880,14 @@ bool LightCacheRestoreLightmap( int num ) {
 	if ( !lightCacheActive || dirtyCharts[num] ) return false;
 	rawLightmap_t& lm = rawLightmaps[num];
 	const Chart& chart = charts[num];
-	memcpy( lm.superLuxels[0], chart.luxels.data(), chart.luxels.size() * sizeof( SuperLuxel ) );
+	lm.styles = chart.styles;
+	for ( int channel = 0; channel < MAX_LIGHTMAPS; ++channel ) {
+		lm.solid[channel] = chart.solid[channel] != 0;
+		if ( lm.styles[channel] == LS_NONE ) continue;
+		if ( lm.superLuxels[channel] == nullptr )
+			lm.superLuxels[channel] = safe_malloc( chart.luxels[channel].size() * sizeof( SuperLuxel ) );
+		memcpy( lm.superLuxels[channel], chart.luxels[channel].data(), chart.luxels[channel].size() * sizeof( SuperLuxel ) );
+	}
 	memcpy( lm.superClusters, chart.clusters.data(), chart.clusters.size() * sizeof( int ) );
 	return true;
 }
@@ -865,7 +899,14 @@ void LightCacheCapture() {
 		const rawLightmap_t& lm = rawLightmaps[i];
 		chart.dependencies = chartDependencies[i];
 		chart.w = lm.w; chart.h = lm.h; chart.sw = lm.sw; chart.sh = lm.sh;
-		chart.luxels.assign( lm.superLuxels[0], lm.superLuxels[0] + size_t( lm.sw ) * lm.sh );
+		chart.styles = lm.styles;
+		for ( int channel = 0; channel < MAX_LIGHTMAPS; ++channel ) {
+			chart.luxels[channel].clear();
+			if ( chart.styles[channel] == LS_NONE ) continue;
+			chart.luxels[channel].resize( size_t( lm.sw ) * lm.sh );
+			if ( lm.superLuxels[channel] != nullptr )
+				memcpy( chart.luxels[channel].data(), lm.superLuxels[channel], chart.luxels[channel].size() * sizeof( SuperLuxel ) );
+		}
 		chart.clusters.assign( lm.superClusters, lm.superClusters + size_t( lm.sw ) * lm.sh );
 	}
 	for ( size_t i = 0; i < grid.size(); ++i ) {
@@ -885,8 +926,35 @@ bool LightCacheRestoreOutputPage( int page, Vector3b *pixels ) {
 
 bool LightCacheRestoreOutputLightmap( rawLightmap_t *lm ) {
 	if ( !reusable || dirtyCharts[lm - rawLightmaps] ) return false;
-	lm->used = charts[lm - rawLightmaps].used;
+	const Chart& chart = charts[lm - rawLightmaps];
+	lm->used = chart.used;
+	for ( int channel = 0; channel < MAX_LIGHTMAPS; ++channel )
+		lm->solid[channel] = chart.solid[channel] != 0;
 	return true;
+}
+
+bool LightCacheRestoreOutputChannel( rawLightmap_t *lm, int channel ) {
+	if ( !reusable || channel < 0 || channel >= MAX_LIGHTMAPS ) return false;
+	const size_t index = lm - rawLightmaps;
+	const Chart& chart = charts[index];
+	return !dirtyCharts[index] && chart.styles[channel] == lm->styles[channel] &&
+	       chart.solid[channel] == byte( lm->solid[channel] ) && chart.pages[channel] >= 0;
+}
+
+void LightCacheClearDirtyOutputRegions( Vector3b *const *pages ) {
+	if ( !reusable ) return;
+	for ( size_t i = 0; i < charts.size(); ++i ) {
+		if ( !dirtyCharts[i] ) continue;
+		const Chart& chart = charts[i];
+		for ( int channel = 0; channel < MAX_LIGHTMAPS; ++channel ) {
+			const int page = chart.pages[channel];
+			if ( page < 0 ) continue;
+			const int width = chart.solid[channel] ? 1 : chart.w;
+			const int height = chart.solid[channel] ? 1 : chart.h;
+			for ( int row = 0; row < height; ++row )
+				std::fill_n( pages[page] + ( chart.y[channel] + row ) * g_game->lightmapSize + chart.x[channel], width, Vector3b( 0 ) );
+		}
+	}
 }
 
 bool LightCacheRestoreVertexColors( int surface ) {
@@ -897,10 +965,11 @@ bool LightCacheRestoreVertexColors( int surface ) {
 	return true;
 }
 
-bool LightCachePlacement( const rawLightmap_t *lm, int& page, int& x, int& y ) {
-	if ( !reusable ) return false;
+bool LightCachePlacement( const rawLightmap_t *lm, int channel, int& page, int& x, int& y ) {
+	if ( !reusable || channel < 0 || channel >= MAX_LIGHTMAPS ) return false;
 	const Chart& chart = charts[lm - rawLightmaps];
-	page = chart.page; x = chart.x; y = chart.y;
+	if ( chart.styles[channel] != lm->styles[channel] || chart.solid[channel] != byte( lm->solid[channel] ) || chart.pages[channel] < 0 ) return false;
+	page = chart.pages[channel]; x = chart.x[channel]; y = chart.y[channel];
 	return true;
 }
 
@@ -914,13 +983,31 @@ void LightCacheFinish() {
 	Hash payload;
 	for ( int i = 0; i < numRawLightmaps; ++i ) {
 		Chart& chart = charts[i];
-		chart.page = rawLightmaps[i].outLightmapNums[0];
-		chart.x = rawLightmaps[i].lightmapX[0]; chart.y = rawLightmaps[i].lightmapY[0];
-		chart.used = rawLightmaps[i].used;
+		const rawLightmap_t& lm = rawLightmaps[i];
+		chart.styles = lm.styles;
+		for ( int channel = 0; channel < MAX_LIGHTMAPS; ++channel ) chart.solid[channel] = lm.solid[channel] ? 1 : 0;
+		for ( int channel = 0; channel < MAX_LIGHTMAPS; ++channel ) {
+			chart.pages[channel] = -1;
+			chart.x[channel] = chart.y[channel] = 0;
+			if ( lm.styles[channel] != LS_NONE && lm.twins[channel] == nullptr && lm.outLightmapNums[channel] >= 0 ) {
+				chart.pages[channel] = lm.outLightmapNums[channel];
+				chart.x[channel] = lm.lightmapX[channel];
+				chart.y[channel] = lm.lightmapY[channel];
+			}
+		}
+		chart.used = lm.used;
+		int dimensions[5] = { chart.w, chart.h, chart.sw, chart.sh, chart.used };
 		if ( !write( writer, payload, &chart.dependencies, 1 ) ||
-		     !write( writer, payload, &chart.w, 8 ) ||
-		     !write( writer, payload, chart.luxels.data(), chart.luxels.size() ) ||
-		     !write( writer, payload, chart.clusters.data(), chart.clusters.size() ) ) file.setstate( std::ios::badbit );
+			!write( writer, payload, dimensions, 5 ) ||
+			!write( writer, payload, chart.styles.data(), chart.styles.size() ) ||
+			!write( writer, payload, chart.solid.data(), chart.solid.size() ) ||
+		     !write( writer, payload, chart.pages.data(), chart.pages.size() ) ||
+		     !write( writer, payload, chart.x.data(), chart.x.size() ) ||
+		     !write( writer, payload, chart.y.data(), chart.y.size() ) ) file.setstate( std::ios::badbit );
+		for ( int channel = 0; channel < MAX_LIGHTMAPS; ++channel )
+			if ( chart.styles[channel] != LS_NONE && !write( writer, payload, chart.luxels[channel].data(), chart.luxels[channel].size() ) )
+				file.setstate( std::ios::badbit );
+		if ( !write( writer, payload, chart.clusters.data(), chart.clusters.size() ) ) file.setstate( std::ios::badbit );
 	}
 	if ( !write( writer, payload, grid.data(), grid.size() ) ) file.setstate( std::ios::badbit );
 	std::vector<Array4<Color4b>> vertexColors;

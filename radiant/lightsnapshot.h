@@ -35,6 +35,12 @@ void LightSnap_start( const Vector3& origin, std::function<void()> redraw, QWidg
 /// Watches the chosen file and reloads after recompiles, keeping the previous preview until a new one is ready.
 bool LightSnap_startBSP( std::function<void()> redraw, QWidget* parent, std::function<void()> cancel );
 
+/// \brief Whether the current preview source is a loaded BSP or .lightcache.
+bool LightSnap_hasCompiledSource();
+
+/// \brief Shows or hides the preview adjustment panel without unloading the source.
+void LightSnap_setPreviewVisible( bool visible );
+
 /// \brief Hides the snapshot and stops a running compile.
 void LightSnap_stop();
 

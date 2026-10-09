@@ -162,7 +162,7 @@ static void HelpLight()
 {
 	const std::vector<HelpOption> options = {
 		{ "-light [options] <filename.map>", "Switch that enters this stage" },
-		{ "-lightcache", "Full direct lighting build with a fresh .lightcache beside the map, including reusable lighting, fixed atlas allocations and a directly loadable editor preview (no lightmap collapsing)" },
+		{ "-lightcache", "Full direct lighting build with a fresh .lightcache beside the map, including reusable style channels, fixed atlas allocations and an editor preview (no lightmap collapsing)" },
 		{ "-incrementaldebug", "Report individual charts invalidated by changed light dependencies; normal -v output only reports totals and cache fallback reasons" },
 		{ "-incremental", "Reuse compatible direct lightmaps and lightgrid samples from .lightcache; otherwise rebuild lighting. Geometry edits require BSP/VIS first. Use the same options as -lightcache." },
 		{ "-approx <N>", "Vertex light approximation tolerance (never use in conjunction with deluxemapping)" },

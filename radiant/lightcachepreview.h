@@ -9,7 +9,8 @@
 inline QByteArray ReadLightCachePreview( QFile& file ){
 	LightCacheHeader header;
 	if ( file.read( reinterpret_cast<char*>( &header ), sizeof( header ) ) != sizeof( header ) ||
-	     ( header.magic != LightCacheHeader{}.magic && header.magic != LightCacheLegacyMagic ) ||
+	     ( header.magic != LightCacheHeader{}.magic && header.magic != LightCacheLegacyMagic &&
+	       header.magic != LightCachePreviousMagic ) ||
 	     header.checksum != LightCacheHeaderChecksum( header ) ||
 	     header.previewOffset < sizeof( header ) || header.previewOffset > uint64_t( file.size() ) ||
 	     header.previewSize > uint64_t( file.size() ) - header.previewOffset ||

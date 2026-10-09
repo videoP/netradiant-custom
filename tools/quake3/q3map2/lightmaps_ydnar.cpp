@@ -1888,10 +1888,10 @@ static void FindOutLightmaps( rawLightmap_t *lm, bool fastAllocate ){
 			continue;
 		}
 
-		/* if this is a styled lightmap, try some normalized locations first */
-		ok = LightCachePlacement( lm, i, x, y );
+		/* reuse this style channel's fixed cache placement when available */
+		ok = LightCachePlacement( lm, lightmapNum, i, x, y );
 		if ( ok ) olm = &outLightmaps[i];
-		if ( lightmapNum > 0 && outLightmaps != nullptr ) {
+		if ( lightmapNum > 0 && outLightmaps != nullptr && !ok ) {
 			/* loop twice */
 			for ( j = 0; j < 2; ++j )
 			{
@@ -2107,7 +2107,7 @@ static void FindOutLightmaps( rawLightmap_t *lm, bool fastAllocate ){
 			xMax = lm->w;
 			yMax = lm->h;
 		}
-		const bool cachedPixels = lightmapNum == 0 && LightCacheRestoreOutputLightmap( lm );
+		const bool cachedPixels = LightCacheRestoreOutputChannel( lm, lightmapNum );
 		if ( !cachedPixels && lightCacheActive && LightCachePageCount() ) {
 			// Erase the old chart, including pixels that become occluded after
 			// relighting, before stamping its replacement over a cached page.
@@ -2121,11 +2121,7 @@ static void FindOutLightmaps( rawLightmap_t *lm, bool fastAllocate ){
 		{
 			for ( x = 0; x < xMax; ++x )
 			{
-				if ( cachedPixels ) {
-					bit_enable( olm->lightBits, ( y + lm->lightmapY[lightmapNum] ) * olm->customWidth + x + lm->lightmapX[lightmapNum] );
-					--olm->freeLuxels;
-					continue;
-				}
+				if ( cachedPixels ) continue; // already reserved before allocating dirty charts
 				/* get luxel */
 				const Vector3& luxel = lm->getBspLuxel( lightmapNum, x, y );
 				if ( luxel[ 0 ] < 0 && !lm->solid[ lightmapNum ] ) {
@@ -2340,6 +2336,31 @@ static void FillOutLightmap( outLightmap_t *olm ){
 	free( lightBytesNew );
 	if ( deluxemap ) {
 		free( dirBytesNew );
+	}
+}
+
+static void ReserveCachedOutputLightmaps(){
+	if ( outLightmaps == nullptr ) return;
+	for ( int i = 0; i < numRawLightmaps; ++i ) {
+		rawLightmap_t *lm = &rawLightmaps[i];
+		for ( int channel = 0; channel < MAX_LIGHTMAPS; ++channel ) {
+			if ( lm->styles[channel] == LS_NONE || lm->twins[channel] != nullptr ||
+			     !LightCacheRestoreOutputChannel( lm, channel ) ) continue;
+			int page, x, y;
+			if ( !LightCachePlacement( lm, channel, page, x, y ) ) continue;
+			outLightmap_t& olm = outLightmaps[page];
+			const int width = lm->solid[channel] ? 1 : lm->w;
+			const int height = lm->solid[channel] ? 1 : lm->h;
+			for ( int row = 0; row < height; ++row ) {
+				for ( int column = 0; column < width; ++column ) {
+					const int offset = ( y + row ) * olm.customWidth + x + column;
+					if ( !bit_is_enabled( olm.lightBits, offset ) ) {
+						bit_enable( olm.lightBits, offset );
+						--olm.freeLuxels;
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -2942,16 +2963,21 @@ void StoreSurfaceLightmaps( bool fastAllocate, bool storeForReal ){
 		numOutLightmaps = 0;
 		numBSPLightmaps = 0;
 		numExtLightmaps = 0;
-		// Recreate the cached pages and stamp into the original rectangles.
-		// Geometry/style changes are rejected before this path is entered.
+		// Restore cached pages; unchanged channels keep their slots while dirty
+		// charts clear and restamp their compatible cached placements.
 		const int cachedPages = LightCachePageCount();
 		if ( cachedPages > 0 ) {
+			std::vector<Vector3b*> cachedPagePixels;
+			cachedPagePixels.reserve( cachedPages );
 			outLightmaps = safe_malloc( cachedPages * sizeof( outLightmap_t ) );
 			for ( int page = 0; page < cachedPages; ++page ) {
 				SetupOutLightmap( &rawLightmaps[0], &outLightmaps[page] );
 				LightCacheRestoreOutputPage( page, outLightmaps[page].bspLightBytes );
+				cachedPagePixels.push_back( outLightmaps[page].bspLightBytes );
 			}
 			numOutLightmaps = cachedPages;
+			LightCacheClearDirtyOutputRegions( cachedPagePixels.data() );
+			ReserveCachedOutputLightmaps();
 		}
 
 		/* find output lightmap */

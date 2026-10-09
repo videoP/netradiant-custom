@@ -50,6 +50,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -71,6 +72,7 @@ CopiedString g_lightFlags = "-fast -patchshadows -samples 2 -filter -bounce 8";
 int g_brightness = 0; // index into c_brightness; start with unscaled compiled lighting
 float g_previewGamma = 1.f; // display adjustment; never changes compiled lightmaps
 
+constexpr unsigned c_lightmapChannels = 4;
 constexpr int c_brightness[] = { 1, 2, 4 }; // GL_RGB_SCALE takes only these
 const char* const c_brightnessNames[] = { "1x", "2x", "4x" };
 
@@ -89,6 +91,7 @@ struct Batch
 {
 	unsigned shader;
 	int lightmap; // -1: lit by vertex colour
+	bool additive = false; // styled lightmap channels are shown at full intensity
 	std::vector<Vert> verts;
 	std::vector<unsigned> indexes;
 };
@@ -141,7 +144,8 @@ bool parse( const QByteArray& data, Pass& pass ){
 	Reader in( data );
 	char magic[4] = {};
 	in.take( magic, 4 );
-	if ( !in.m_ok || std::memcmp( magic, "LSN1", 4 ) != 0 ) {
+	const bool styledChannels = std::memcmp( magic, "LSN2", 4 ) == 0;
+	if ( !in.m_ok || ( !styledChannels && std::memcmp( magic, "LSN1", 4 ) != 0 ) ) {
 		return false;
 	}
 	pass.number = in.get<unsigned>();
@@ -166,19 +170,21 @@ bool parse( const QByteArray& data, Pass& pass ){
 		}
 	}
 
-	std::map<std::pair<unsigned, int>, std::size_t> batchOf;
+	std::map<std::tuple<unsigned, int, bool>, std::size_t> batchOf;
 	for ( unsigned s = 0; s < numSurfaces && in.m_ok; ++s ) {
 		const unsigned shader = in.get<unsigned>();
 		const int lightmap = in.get<int>();
+		const unsigned channel = styledChannels ? in.get<unsigned>() : 0;
 		const unsigned numVerts = in.get<unsigned>();
 		const unsigned numIndexes = in.get<unsigned>();
-		if ( !in.m_ok || shader >= pass.shaders.size() || numVerts > 10000000 || numIndexes > 30000000 ) {
+		if ( !in.m_ok || shader >= pass.shaders.size() || channel >= c_lightmapChannels ||
+			numVerts > 10000000 || numIndexes > 30000000 ) {
 			return false;
 		}
 
-		const auto [ it, added ] = batchOf.try_emplace( { shader, lightmap }, pass.batches.size() );
+		const auto [ it, added ] = batchOf.try_emplace( { shader, lightmap, channel > 0 }, pass.batches.size() );
 		if ( added ) {
-			pass.batches.push_back( { shader, lightmap, {}, {} } );
+			pass.batches.push_back( { shader, lightmap, channel > 0, {}, {} } );
 		}
 		Batch& batch = pass.batches[ it->second ];
 
@@ -200,6 +206,7 @@ bool parse( const QByteArray& data, Pass& pass ){
 			batch.indexes[i] += base;
 		}
 	}
+	std::stable_partition( pass.batches.begin(), pass.batches.end(), []( const Batch& batch ) { return !batch.additive; } );
 	return in.m_ok;
 }
 
@@ -952,6 +959,23 @@ void LightSnap_stop(){
 	set_status( "" );
 }
 
+bool LightSnap_hasCompiledSource(){
+	return g_job != nullptr && g_job->fromBsp;
+}
+
+void LightSnap_setPreviewVisible( bool visible ){
+	if ( g_gammaOverlay != nullptr ) {
+		if ( visible ) {
+			g_gammaOverlay->sync();
+			g_gammaOverlay->show();
+			g_gammaOverlay->raise();
+		}
+		else {
+			g_gammaOverlay->hide();
+		}
+	}
+}
+
 void LightSnap_start( const Vector3& origin, std::function<void()> redraw, QWidget* parent, std::function<void()> cancel ){
 	LightSnap_stop();
 
@@ -1193,8 +1217,20 @@ void LightSnap_draw( const Matrix4& modelview, const Matrix4& projection ){
 	}
 	gl().glEnableClientState( GL_VERTEX_ARRAY );
 
-	bool lightmapped = false, first = true;
+	bool lightmapped = false, first = true, additive = false;
 	for ( const Batch& batch : g_pass->batches ) {
+		if ( batch.additive != additive ) {
+			additive = batch.additive;
+			if ( additive ) {
+				gl().glEnable( GL_BLEND );
+				gl().glBlendFunc( GL_ONE, GL_ONE );
+				gl().glDepthMask( GL_FALSE );
+			}
+			else {
+				gl().glDisable( GL_BLEND );
+				gl().glDepthMask( GL_TRUE );
+			}
+		}
 		const bool useLightmap = batch.lightmap >= 0 && std::size_t( batch.lightmap ) < g_lightmapTextures.size();
 		if ( gammaShader ) gl().glUniform1i( g_gammaLightmappedUniform, useLightmap ? 1 : 0 );
 
@@ -1249,6 +1285,8 @@ void LightSnap_draw( const Matrix4& modelview, const Matrix4& projection ){
 	}
 
 	/* hand the state back as the camera's own 2D drawing expects to find it */
+	gl().glDisable( GL_BLEND );
+	gl().glDepthMask( GL_TRUE );
 	if ( gammaShader ) gl().glUseProgram( 0 );
 	gl().glDisableClientState( GL_COLOR_ARRAY );
 	gl().glClientActiveTexture( GL_TEXTURE1 );
