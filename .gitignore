@@ -8,3 +8,4 @@
 /.build-tmp/
 /.clang*
 /compile_commands.json
+*.zip
