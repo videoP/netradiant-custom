@@ -92,6 +92,14 @@ public:
 	void post( const scene::Path& path, scene::Instance& instance ) const override {
 		Entity* entity = Node_getEntity( path.top() );
 		if ( entity != 0 && ( instance.childSelected() || Instance_isSelected( instance ) ) ) {
+			if ( path.top().get().excluded( scene::Node::eInstanceOwner ) && !string_equal( m_classname, "func_instance" ) ) {
+				globalWarningStream() << "Open the instance source to edit its contents. Changing an instance's entity class is not supported.\n";
+				return;
+			}
+			if ( string_equal( m_classname, "func_instance" ) && !string_equal( entity->getClassName(), "func_instance" ) ) {
+				globalWarningStream() << "Use File / Add Map Instance to link a source map.\n";
+				return;
+			}
 			if( path.top().get_pointer() == m_world ){ /* do not want to convert whole worldspawn entity */
 				if( instance.childSelected() && !m_2world ){ /* create an entity from world brushes instead */
 					EntityClass* entityClass = GlobalEntityClassManager().findOrInsert( m_classname, true );
@@ -377,6 +385,10 @@ AABB Doom3Light_getBounds( const AABB& workzone ){
 int g_iLastLightIntensity = 300;
 
 void Entity_createFromSelection( const char* name, const Vector3& origin ){
+	if ( string_equal( name, "func_instance" ) ) {
+		globalWarningStream() << "Use File / Add Map Instance to link a source map.\n";
+		return;
+	}
 #if 0
 	if ( string_equal_nocase( name, "worldspawn" ) ) {
 		qt_MessageBox( MainFrame_getWindow(), "Can't create an entity with worldspawn.", "info" );

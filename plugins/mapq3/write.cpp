@@ -95,10 +95,12 @@ public:
 	}
 	bool pre( scene::Node& node ) const override {
 		m_stack.push( false );
+		if ( node.excluded( scene::Node::eInstancePreview ) )
+			return false; // source contents never belong to the saved parent
 
 		Entity* entity = Node_getEntity( node );
 		if ( entity != 0 ) {
-			if( entity->isContainer() && Node_getTraversable( node )->empty() && !string_equal( entity->getClassName(), "worldspawn" )
+			if( entity->isContainer() && Node_getTraversable( node )->empty() && !string_equal( entity->getClassName(), "worldspawn" ) && !string_equal( entity->getClassName(), "func_instance" )
 			 && !entity->hasKeyValue( "origin" ) ){
 				globalErrorStream() << "discarding empty group entity: # = " << g_count_entities << "; classname = " << entity->getClassName() << '\n';
 				return false;

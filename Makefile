@@ -926,6 +926,7 @@ $(INSTALLDIR)/radiant.$(EXE): \
 	radiant/mainframe.o \
 	radiant/main.o \
 	radiant/map.o \
+	radiant/instancespanel.o \
 	radiant/memreport.o \
 	radiant/modelwindow.o \
 	radiant/mru.o \

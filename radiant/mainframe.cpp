@@ -26,6 +26,7 @@
 //
 
 #include "mainframe.h"
+#include "instancespanel.h"
 
 #include "debugging/debugging.h"
 #include "version.h"
@@ -877,6 +878,9 @@ void create_file_menu( QMenuBar *menubar ){
 
 	create_menu_item_with_mnemonic( menu, "&Open...", "OpenMap" );
 	create_menu_item_with_mnemonic( menu, "&Import...", "ImportMap" );
+	create_menu_item_with_mnemonic( menu, "Add Map &Instance...", "CreateMapInstance" );
+	create_menu_item_with_mnemonic( menu, "Reload Map Instances", "ReloadMapInstances" );
+	create_menu_item_with_mnemonic( menu, "Open Instance Source", "OpenMapInstanceSource" );
 	menu->addSeparator();
 	create_menu_item_with_mnemonic( menu, "&Save", "SaveMap" );
 	create_menu_item_with_mnemonic( menu, "Save &as...", "SaveMapAs" );
@@ -951,6 +955,7 @@ void create_view_menu( QMenuBar *menubar, MainFrame::EViewStyle style ){
 	create_menu_item_with_mnemonic( menu, "Layers Browser", "ToggleLayersBrowser" );
 	create_menu_item_with_mnemonic( menu, "&Surface Inspector", "SurfaceInspector" );
 	create_menu_item_with_mnemonic( menu, "Entity List", "ToggleEntityList" );
+	create_menu_item_with_mnemonic( menu, "Map Instances", "ToggleInstancesPanel" );
 
 	menu->addSeparator();
 	{
@@ -1874,6 +1879,7 @@ void MainFrame::Create(){
 	}
 
 	EntityList_constructWindow( window );
+	InstancesPanel_constructWindow( window );
 	PreferencesDialog_constructWindow( window );
 	FindTextureDialog_constructWindow( window );
 	SurfaceInspector_constructWindow( window );
@@ -1913,6 +1919,7 @@ void MainFrame::Shutdown(){
 	s_qe_every_second_timer.disable();
 
 	EntityList_destroyWindow();
+	InstancesPanel_destroyWindow();
 
 	delete std::exchange( m_pXYWnd, nullptr );
 	delete std::exchange( m_pYZWnd, nullptr );
@@ -2089,6 +2096,7 @@ void MainFrame_Construct(){
 	GlobalCommands_insert( "ToggleModelBrowser", makeCallbackF( ModelBrowser_ToggleShow ), QKeySequence( "/" ) );
 	GlobalCommands_insert( "ToggleLayersBrowser", makeCallbackF( LayersBrowser_ToggleShow ), QKeySequence( "L" ) );
 	GlobalCommands_insert( "ToggleEntityList", makeCallbackF( EntityList_toggleShown ), QKeySequence( "Shift+L" ) );
+	GlobalCommands_insert( "ToggleInstancesPanel", makeCallbackF( InstancesPanel_toggleShown ) );
 
 	Select_registerCommands();
 	Layers_registerCommands();

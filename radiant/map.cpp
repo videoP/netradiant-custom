@@ -22,6 +22,10 @@
 #include "map.h"
 
 #include <unordered_set>
+#include <filesystem>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QDateTime>
 
 #include "debugging/debugging.h"
 
@@ -390,7 +394,15 @@ void Map_SetWorldspawn( Map& map, scene::Node* node ){
    ================
  */
 #include "modelwindow.h"
+struct InstanceLoadState {
+	std::string source, error;
+	qint64 modified = 0, size = -1;
+	bool loaded = false;
+};
+static std::map<scene::Node*, InstanceLoadState> g_instanceLoadStates;
+
 void Map_Free(){
+	g_instanceLoadStates.clear();
 	Map_RegionOff();
 	Select_ShowAllHidden();
 
@@ -758,7 +770,16 @@ inline scene::Cloneable* Node_getCloneable( scene::Node& node ){
 inline scene::Node& node_clone( scene::Node& node ){
 	scene::Cloneable* cloneable = Node_getCloneable( node );
 	if ( cloneable != 0 ) {
-		return cloneable->clone();
+		scene::Node& copy = cloneable->clone();
+		if ( node.excluded( scene::Node::eInstanceOwner ) )
+			copy.enable( scene::Node::eInstanceOwner );
+		if ( const auto state = g_instanceLoadStates.find( &node ); state != g_instanceLoadStates.end() )
+			g_instanceLoadStates[&copy] = state->second;
+		if ( node.excluded( scene::Node::eInstancePreview ) )
+			copy.enable( scene::Node::eInstancePreview );
+		if ( node.excluded( scene::Node::eInstanceHidden ) )
+			copy.enable( scene::Node::eInstanceHidden );
+		return copy;
 	}
 
 	return ( new scene::NullNode )->node();
@@ -792,6 +813,270 @@ public:
 		m_path.pop();
 	}
 };
+
+class InstancePreviewNodes : public scene::Traversable::Walker
+{
+	std::vector<scene::Node*>& m_nodes;
+public:
+	InstancePreviewNodes( std::vector<scene::Node*>& nodes ) : m_nodes( nodes ){
+	}
+	bool pre( scene::Node& node ) const override {
+		if ( node.excluded( scene::Node::eInstancePreview ) )
+			m_nodes.push_back( &node );
+		return false;
+	}
+};
+
+class MapInstanceNodes : public scene::Graph::Walker
+{
+	std::vector<scene::Node*>& m_nodes;
+public:
+	MapInstanceNodes( std::vector<scene::Node*>& nodes ) : m_nodes( nodes ){
+	}
+	bool pre( const scene::Path& path, scene::Instance& instance ) const override {
+		if ( path.top().get().excluded( scene::Node::eInstancePreview ) )
+			return false;
+		Entity* entity = Node_getEntity( path.top() );
+		if ( entity != nullptr && string_equal( entity->getClassName(), "func_instance" ) ) {
+			m_nodes.push_back( path.top().get_pointer() );
+			return false;
+		}
+		return entity == nullptr;
+	}
+};
+
+class InsertInstancePreview : public scene::Traversable::Walker
+{
+	scene::Traversable& m_target;
+	class MarkPreview : public scene::Traversable::Walker {
+	public:
+		bool pre( scene::Node& node ) const override {
+			node.enable( scene::Node::eInstancePreview );
+			node.m_layer = nullptr; // the source map's Layers will be released
+			return true;
+		}
+	};
+public:
+	InsertInstancePreview( scene::Traversable& target ) : m_target( target ){
+	}
+	bool pre( scene::Node& node ) const override {
+		Entity* entity = Node_getEntity( node );
+		if ( entity != nullptr && string_equal( entity->getClassName(), "worldspawn" ) )
+			return true; // world geometry belongs directly to the instance
+		NodeSmartReference clone( Node_Clone( node ) );
+		Node_traverseSubgraph( clone, MarkPreview() );
+		m_target.insert( clone );
+		return false;
+	}
+};
+
+class ValidateInstanceSource : public scene::Traversable::Walker {
+public:
+	mutable bool hasWorld = false;
+	mutable bool hasInstance = false;
+	mutable bool sawEntity = false;
+	bool pre( scene::Node& node ) const override {
+		if ( Entity* entity = Node_getEntity( node ) ) {
+			if ( !sawEntity ) {
+				hasWorld = string_equal( entity->getClassName(), "worldspawn" );
+				sawEntity = true;
+			}
+			hasInstance |= string_equal( entity->getClassName(), "func_instance" ) ||
+				string_equal( entity->getClassName(), "func_instance_parms" ) || string_equal( entity->getClassName(), "func_instance_origin" );
+		}
+		return true;
+	}
+};
+
+static std::string MapInstanceSourcePath( const char* file ){
+	std::string normalized( file );
+	std::replace( normalized.begin(), normalized.end(), '\\', '/' );
+	return ( std::filesystem::path( Map_Name( g_map ) ).parent_path() / normalized ).lexically_normal().generic_string();
+}
+
+static void Map_ReloadInstancesImpl( const std::vector<scene::Node*>* requested ){
+	if ( !Map_Valid( g_map ) || Map_Unnamed( g_map ) )
+		return;
+
+	std::vector<scene::Node*> instances;
+	GlobalSceneGraph().traverse( MapInstanceNodes( instances ) );
+	std::unordered_set<std::string> requestedSources;
+	if ( requested != nullptr ) {
+		for ( scene::Node* node : instances )
+			if ( std::find( requested->begin(), requested->end(), node ) != requested->end() )
+				requestedSources.insert( MapInstanceSourcePath( Node_getEntity( *node )->getKeyValue( "file" ) ) );
+	}
+	// Parse each source once per reload. Preview clones own no source Layers
+	// and are excluded from undo and serialization.
+	std::map<std::string, NodeSmartReference> sources;
+	std::map<std::string, std::string> failedSources;
+	std::map<std::string, QFileInfo> sourceInfo;
+	for ( scene::Node* node : instances ) {
+		Entity* entity = Node_getEntity( *node );
+		const char* file = entity->getKeyValue( "file" );
+		const std::string source = MapInstanceSourcePath( file );
+		if ( requested != nullptr && !requestedSources.count( source ) )
+			continue;
+		auto& state = g_instanceLoadStates[node];
+		if ( state.source != source ) state = InstanceLoadState();
+		state.source = source;
+		state.error.clear();
+		const auto fail = [&]( const std::string& error ) {
+			state.error = error;
+			globalErrorStream() << error.c_str() << ": " << file << '\n';
+		};
+		node->enable( scene::Node::eInstanceOwner );
+		scene::Traversable* target = Node_getTraversable( *node );
+		if ( target == nullptr ) {
+			fail( "Instance cannot contain a preview" );
+			continue;
+		}
+		if ( string_empty( file ) ) {
+			fail( "func_instance has no file key" );
+			continue;
+		}
+		if ( !path_extension_is( source.c_str(), "map" ) ) {
+			fail( "Instance sources must be .map files" );
+			continue;
+		}
+		if ( path_equal( source.c_str(), std::filesystem::path( Map_Name( g_map ) ).lexically_normal().generic_string().c_str() ) ) {
+			fail( "func_instance cannot reference the current map" );
+			continue;
+		}
+		if ( failedSources.count( source ) ) {
+			state.error = failedSources.at( source );
+			continue;
+		}
+		auto found = sources.find( source );
+		if ( found == sources.end() ) {
+			sourceInfo.emplace( source, QFileInfo( QString::fromLatin1( source.c_str() ) ) );
+			// Capture before parsing so a concurrent save still appears as Changed.
+			sourceInfo.at( source ).lastModified();
+			sourceInfo.at( source ).size();
+			TextFileInputStream input( source.c_str() );
+			if ( input.failed() ) {
+				fail( "Cannot load func_instance source" );
+				failedSources.emplace( source, state.error );
+				continue;
+			}
+			NodeSmartReference parsed( NewMapRoot( "" ) );
+			const EBrushType brushType = GlobalBrushCreator().getFormat();
+			MapFormat_forFile( source.c_str() ).readGraph( parsed, input, GlobalEntityCreator() );
+			if ( brushType != GlobalBrushCreator().getFormat() ) {
+				Node_getTraversable( parsed )->traverse( Convert_Brushes( BrushType_getTexdefType( GlobalBrushCreator().getFormat() ), BrushType_getTexdefType( brushType ) ) );
+				GlobalBrushCreator().toggleFormat( brushType );
+			}
+			ValidateInstanceSource validation;
+			Node_getTraversable( parsed )->traverse( validation );
+			if ( parsed.get().excluded( scene::Node::eMapLoadError ) || !validation.hasWorld || validation.hasInstance ) {
+				fail( "Invalid instance source (worldspawn required; nesting unsupported)" );
+				failedSources.emplace( source, state.error );
+				continue;
+			}
+			found = sources.emplace( source, parsed ).first;
+		}
+		NodeSmartReference staged( ( new BasicContainer )->node() );
+		Node_getTraversable( found->second )->traverse( InsertInstancePreview( *Node_getTraversable( staged ) ) );
+		std::vector<scene::Node*> previews;
+		target->traverse( InstancePreviewNodes( previews ) );
+		for ( scene::Node* preview : previews )
+			target->erase( *preview );
+		previews.clear();
+		Node_getTraversable( staged )->traverse( InstancePreviewNodes( previews ) );
+		for ( scene::Node* preview : previews )
+			target->insert( *preview );
+		state.loaded = true;
+		state.modified = sourceInfo.at( source ).lastModified().toMSecsSinceEpoch();
+		state.size = sourceInfo.at( source ).size();
+	}
+	SceneChangeNotify();
+}
+
+void Map_ReloadInstances(){
+	Map_ReloadInstancesImpl( nullptr );
+}
+
+void Map_ReloadInstanceSources( const std::vector<scene::Node*>& nodes ){
+	Map_ReloadInstancesImpl( &nodes );
+}
+
+std::vector<MapInstanceInfo> Map_GetInstances(){
+	std::vector<MapInstanceInfo> result;
+	if ( !Map_Valid( g_map ) ) return result;
+	std::vector<scene::Node*> nodes;
+	GlobalSceneGraph().traverse( MapInstanceNodes( nodes ) );
+	std::map<std::string, QFileInfo> files;
+	for ( scene::Node* node : nodes ) {
+		Entity* entity = Node_getEntity( *node );
+		const std::string source = MapInstanceSourcePath( entity->getKeyValue( "file" ) );
+		const QFileInfo& info = files.emplace( source, QFileInfo( QString::fromLatin1( source.c_str() ) ) ).first->second;
+		std::string status = "Not loaded", error;
+		const auto found = g_instanceLoadStates.find( node );
+		if ( found == g_instanceLoadStates.end() ) {
+			std::vector<scene::Node*> previews;
+			if ( auto* children = Node_getTraversable( *node ) ) children->traverse( InstancePreviewNodes( previews ) );
+			if ( !previews.empty() ) status = "Changed"; // restored/duplicated preview needs a known source revision
+		}
+		if ( found != g_instanceLoadStates.end() && found->second.source == source ) {
+			const auto& state = found->second;
+			error = state.error;
+			if ( !error.empty() ) status = "Failed";
+			else if ( state.loaded ) status = state.modified == info.lastModified().toMSecsSinceEpoch() && state.size == info.size()? "Loaded" : "Changed";
+		}
+		if ( !info.isFile() || string_empty( entity->getKeyValue( "file" ) ) ) status = "Missing";
+		scene::Path path( makeReference( GlobalSceneGraph().root() ) );
+		path.push( makeReference( *node ) );
+		std::string placement = entity->getKeyValue( "targetname" );
+		if ( !placement.empty() ) placement += " / ";
+		placement += entity->getKeyValue( "origin" );
+		result.push_back( { node, entity->getKeyValue( "file" ), source, placement, status, error,
+			info.isFile()? info.lastModified().toMSecsSinceEpoch() : 0,
+			!node->excluded( scene::Node::eInstanceHidden ), Instance_isSelected( findInstance( path ) ) } );
+	}
+	// Do not retain references or metadata for removed scene nodes.
+	for ( auto it = g_instanceLoadStates.begin(); it != g_instanceLoadStates.end(); )
+		if ( std::find( nodes.begin(), nodes.end(), it->first ) == nodes.end() ) it = g_instanceLoadStates.erase( it );
+		else ++it;
+	return result;
+}
+
+void Map_SelectInstances( const std::vector<scene::Node*>& nodes, bool focus ){
+	const auto instances = Map_GetInstances(); // validate pointers before dereferencing GUI selections
+	GlobalSelectionSystem().setSelectedAll( false );
+	for ( const auto& info : instances ) {
+		if ( std::find( nodes.begin(), nodes.end(), info.node ) == nodes.end() ) continue;
+		scene::Path path( makeReference( GlobalSceneGraph().root() ) );
+		path.push( makeReference( *info.node ) );
+		Instance_setSelected( findInstance( path ), true );
+	}
+	if ( focus && GlobalSelectionSystem().countSelected() != 0 ) FocusAllViews();
+	SceneChangeNotify();
+}
+
+void Map_SetInstanceVisible( scene::Node* node, bool visible ){
+	for ( const auto& info : Map_GetInstances() ) {
+		if ( info.node != node ) continue;
+		if ( visible ) node->disable( scene::Node::eInstanceHidden );
+		else {
+			node->enable( scene::Node::eInstanceHidden );
+			scene::Path path( makeReference( GlobalSceneGraph().root() ) );
+			path.push( makeReference( *node ) );
+			Instance_setSelected( findInstance( path ), false );
+		}
+		SceneChangeNotify();
+		break;
+	}
+}
+
+void Map_RemoveInstances( const std::vector<scene::Node*>& nodes ){
+	std::vector<scene::Node*> validated;
+	for ( const auto& info : Map_GetInstances() )
+		if ( std::find( nodes.begin(), nodes.end(), info.node ) != nodes.end() ) validated.push_back( info.node );
+	if ( validated.empty() ) return;
+	UndoableCommand undo( "removeMapInstances" );
+	for ( scene::Node* node : validated ) Node_getTraversable( GlobalSceneGraph().root() )->erase( *node );
+	SceneChangeNotify();
+}
 
 scene::Node& Node_Clone( scene::Node& node ){
 	scene::Node& clone = node_clone( node );
@@ -1032,6 +1317,7 @@ void Map_LoadFile( const char *filename ){
 	Map_StartPosition();
 
 	g_currentMap = &g_map;
+	Map_ReloadInstances();
 
 	GridStatus_changed();
 }
@@ -1906,6 +2192,99 @@ void ImportMap(){
 	}
 }
 
+std::size_t Map_AddInstances( const std::vector<std::string>& files, const Vector3& origin ){
+	if ( files.empty() )
+		return 0;
+	if ( Map_Unnamed( g_map ) ) {
+		globalErrorStream() << "Save the master map before creating an instance.\n";
+		return 0;
+	}
+	// Validate the complete choice before changing the scene, so one bad path
+	// cannot leave a partially inserted batch.
+	std::vector<std::string> relativePaths;
+	const std::filesystem::path masterPath( Map_Name( g_map ) );
+	const std::string master = masterPath.lexically_normal().generic_string();
+	const std::filesystem::path parent = masterPath.parent_path();
+	for ( const std::string& chosen : files ) {
+		if ( !path_extension_is( chosen.c_str(), "map" ) || path_equal( std::filesystem::path( chosen ).lexically_normal().generic_string().c_str(), master.c_str() ) ) {
+			globalErrorStream() << "Choose a separate .map file for the instance source: " << chosen.c_str() << '\n';
+			return 0;
+		}
+		TextFileInputStream input( chosen.c_str() );
+		if ( input.failed() ) {
+			globalErrorStream() << "Cannot read instance source: " << chosen.c_str() << '\n';
+			return 0;
+		}
+		std::error_code error;
+		const std::filesystem::path relative = std::filesystem::relative( std::filesystem::path( chosen ), parent, error );
+		if ( error || relative.empty() || path_equal( ( parent / relative ).lexically_normal().generic_string().c_str(), master.c_str() ) ) {
+			globalErrorStream() << "Cannot use instance source relative to the master: " << chosen.c_str() << '\n';
+			return 0;
+		}
+		relativePaths.push_back( relative.generic_string() );
+	}
+	UndoableCommand undo( "addMapInstances" );
+	EntityClass* eclass = GlobalEntityClassManager().findOrInsert( "func_instance", true );
+	std::vector<NodeSmartReference> added;
+	for ( const std::string& relative : relativePaths ) {
+		NodeSmartReference node( GlobalEntityCreator().createEntity( eclass ) );
+		node.get().enable( scene::Node::eInstanceOwner );
+		Entity* entity = Node_getEntity( node );
+		entity->setKeyValue( "classname", "func_instance" );
+		entity->setKeyValue( "file", relative.c_str() );
+		entity->setKeyValue( "origin", StringStream( origin.x(), ' ', origin.y(), ' ', origin.z() ) );
+		Node_getTraversable( GlobalSceneGraph().root() )->insert( node );
+		added.push_back( node );
+	}
+	Map_ReloadInstances();
+	GlobalSelectionSystem().setSelectedAll( false );
+	for ( const NodeSmartReference& node : added ) {
+		scene::Path path( makeReference( GlobalSceneGraph().root() ) );
+		path.push( makeReference( node.get() ) );
+		Instance_setSelected( findInstance( path ), true );
+	}
+	return added.size();
+}
+
+void CreateMapInstance(){
+	if ( Map_Unnamed( g_map ) ) {
+		globalErrorStream() << "Save the master map before adding instances.\n";
+		return;
+	}
+	const std::string directory = std::filesystem::path( Map_Name( g_map ) ).parent_path().generic_string();
+	const QStringList chosen = QFileDialog::getOpenFileNames( MainFrame_getWindow(), "Add Map Instances",
+		QString::fromLatin1( directory.c_str() ), "Map files (*.map)" );
+	std::vector<std::string> files;
+	for ( const QString& file : chosen )
+		files.emplace_back( file.toLatin1().constData() );
+	const AABB selected = GlobalSelectionSystem().getBoundsSelected();
+	Map_AddInstances( files, aabb_valid( selected )? selected.origin : g_vector3_identity );
+}
+
+void OpenMapInstanceSource(){
+	if ( GlobalSelectionSystem().countSelected() != 1 ) {
+		globalErrorStream() << "Select one map instance to open its source.\n";
+		return;
+	}
+	Entity* entity = Node_getEntity( GlobalSelectionSystem().ultimateSelected().path().top() );
+	if ( entity == nullptr || !string_equal( entity->getClassName(), "func_instance" ) || string_empty( entity->getKeyValue( "file" ) ) ) {
+		globalErrorStream() << "Select a func_instance with a file key.\n";
+		return;
+	}
+	const std::string source = MapInstanceSourcePath( entity->getKeyValue( "file" ) );
+	TextFileInputStream input( source.c_str() );
+	if ( input.failed() ) {
+		globalErrorStream() << "Cannot open instance source: " << source.c_str() << '\n';
+		return;
+	}
+	if ( !ConfirmModified( "Open Instance Source" ) )
+		return;
+	MRU_AddFile( Map_Name( g_map ) );
+	MRU_AddFile( source.c_str() );
+	Map_Free();
+	Map_LoadFile( source.c_str() );
+}
+
 bool Map_SaveAs(){
 	const char* filename = map_save( "Save Map" );
 
@@ -2477,6 +2856,9 @@ void Map_Construct(){
 	GlobalCommands_insert( "SaveMap", makeCallbackF( SaveMap ), QKeySequence( "Ctrl+S" ) );
 	GlobalCommands_insert( "SaveMapAs", makeCallbackF( SaveMapAs ) );
 	GlobalCommands_insert( "SaveSelected", makeCallbackF( ExportMap ) );
+	GlobalCommands_insert( "CreateMapInstance", makeCallbackF( CreateMapInstance ) );
+	GlobalCommands_insert( "ReloadMapInstances", makeCallbackF( Map_ReloadInstances ) );
+	GlobalCommands_insert( "OpenMapInstanceSource", makeCallbackF( OpenMapInstanceSource ) );
 	GlobalCommands_insert( "SaveRegion", makeCallbackF( SaveRegion ) );
 
 	GlobalCommands_insert( "RegionOff", makeCallbackF( RegionOff ) );

@@ -954,6 +954,8 @@ public:
 		: m_select( select ){
 	}
 	bool pre( const scene::Path& path, scene::Instance& instance ) const override {
+		if ( path.top().get().excluded( scene::Node::eInstancePreview ) )
+			return false;
 		Selectable* selectable = Instance_getSelectable( instance );
 		if ( selectable != 0 ) {
 			selectable->setSelected( m_select );
@@ -971,6 +973,8 @@ public:
 		: m_select( select ), m_mode( mode ){
 	}
 	bool pre( const scene::Path& path, scene::Instance& instance ) const override {
+		if ( path.top().get().excluded( scene::Node::eInstancePreview ) )
+			return false;
 		ComponentSelectionTestable* componentSelectionTestable = Instance_getComponentSelectionTestable( instance );
 		if ( componentSelectionTestable ) {
 			componentSelectionTestable->setSelectedComponents( m_select, m_mode );
@@ -1833,26 +1837,49 @@ inline RadiantSelectionSystem& getSelectionSystem(){
 
 #include "map.h"
 
+static Selectable* MapInstancePreviewOwner( const scene::Path& path ){
+	scene::Path ownerPath( path );
+	bool preview = false;
+	while ( !ownerPath.empty() ) {
+		if ( ownerPath.top().get().excluded( scene::Node::eInstancePreview ) )
+			preview = true;
+		Entity* entity = Node_getEntity( ownerPath.top() );
+		if ( preview && entity != nullptr && string_equal( entity->getClassName(), "func_instance" ) ) {
+			scene::Instance* owner = GlobalSceneGraph().find( ownerPath );
+			return owner != nullptr? Instance_getSelectable( *owner ) : nullptr;
+		}
+		ownerPath.pop();
+	}
+	return nullptr;
+}
+
 class testselect_entity_visible : public scene::Graph::Walker
 {
 	Selector& m_selector;
 	SelectionTest& m_test;
+	Selectable* selectable( const scene::Path& path, scene::Instance& instance ) const {
+		if ( Selectable* owner = MapInstancePreviewOwner( path ) )
+			return owner;
+		if ( path.top().get_pointer() == Map_GetWorldspawn( g_map ) ||
+			( node_is_group( path.top() ) && !path.top().get().excluded( scene::Node::eInstanceOwner ) ) )
+			return nullptr;
+		return Node_isEntity( path.top() )? Instance_getSelectable( instance ) : nullptr;
+	}
 public:
 	testselect_entity_visible( Selector& selector, SelectionTest& test )
 		: m_selector( selector ), m_test( test ){
 	}
 	bool pre( const scene::Path& path, scene::Instance& instance ) const override {
-		if( path.top().get_pointer() == Map_GetWorldspawn( g_map ) ||
-		    node_is_group( path.top().get() ) ){
+		Selectable* owner = MapInstancePreviewOwner( path );
+		if( owner == nullptr && ( path.top().get_pointer() == Map_GetWorldspawn( g_map ) ||
+		    ( node_is_group( path.top().get() ) && !path.top().get().excluded( scene::Node::eInstanceOwner ) ) ) ){
 			return false;
 		}
-		Selectable* selectable = Instance_getSelectable( instance );
-		if ( selectable != 0
-		     && Node_isEntity( path.top() ) ) {
-			m_selector.pushSelectable( *selectable );
+		if ( Selectable* target = selectable( path, instance ) ) {
+			m_selector.pushSelectable( *target );
 		}
 
-		SelectionTestable* selectionTestable = Instance_getSelectionTestable( instance );
+		SelectionTestable* selectionTestable = owner != nullptr? InstanceTypeCast<SelectionTestable>::cast( instance ) : Instance_getSelectionTestable( instance );
 		if ( selectionTestable ) {
 			selectionTestable->testSelect( m_selector, m_test );
 		}
@@ -1860,9 +1887,7 @@ public:
 		return true;
 	}
 	void post( const scene::Path& path, scene::Instance& instance ) const override {
-		Selectable* selectable = Instance_getSelectable( instance );
-		if ( selectable != 0
-		     && Node_isEntity( path.top() ) ) {
+		if ( selectable( path, instance ) != nullptr ) {
 			m_selector.popSelectable();
 		}
 	}
@@ -1877,12 +1902,15 @@ public:
 		: m_selector( selector ), m_test( test ){
 	}
 	bool pre( const scene::Path& path, scene::Instance& instance ) const override {
-		Selectable* selectable = Instance_getSelectable( instance );
+		Selectable* selectable = MapInstancePreviewOwner( path );
+		if ( selectable == nullptr )
+			selectable = Instance_getSelectable( instance );
 		if ( selectable != 0 ) {
 			m_selector.pushSelectable( *selectable );
 		}
 
-		SelectionTestable* selectionTestable = Instance_getSelectionTestable( instance );
+		// Test the preview's geometry while the selector belongs to its owner.
+		SelectionTestable* selectionTestable = InstanceTypeCast<SelectionTestable>::cast( instance );
 		if ( selectionTestable ) {
 			selectionTestable->testSelect( m_selector, m_test );
 		}
@@ -1890,7 +1918,9 @@ public:
 		return true;
 	}
 	void post( const scene::Path& path, scene::Instance& instance ) const override {
-		Selectable* selectable = Instance_getSelectable( instance );
+		Selectable* selectable = MapInstancePreviewOwner( path );
+		if ( selectable == nullptr )
+			selectable = Instance_getSelectable( instance );
 		if ( selectable != 0 ) {
 			m_selector.popSelectable();
 		}
@@ -1907,6 +1937,8 @@ public:
 		: m_selector( selector ), m_test( test ), m_mode( mode ){
 	}
 	bool pre( const scene::Path& path, scene::Instance& instance ) const override {
+		if ( path.top().get().excluded( scene::Node::eInstancePreview ) )
+			return false;
 		ComponentSelectionTestable* componentSelectionTestable = Instance_getComponentSelectionTestable( instance );
 		if ( componentSelectionTestable ) {
 			componentSelectionTestable->testSelectComponents( m_selector, m_test, m_mode );
@@ -1942,6 +1974,10 @@ void Scene_TestSelect_Primitive( Selector& selector, SelectionTest& test, const 
 	Scene_forEachVisible( GlobalSceneGraph(), volume, testselect_primitive_visible( selector, test ) );
 }
 
+void Scene_TestSelect_Entity( Selector& selector, SelectionTest& test, const VolumeTest& volume ){
+	Scene_forEachVisible( GlobalSceneGraph(), volume, testselect_entity_visible( selector, test ) );
+}
+
 void Scene_TestSelect_Component_Selected( Selector& selector, SelectionTest& test, const VolumeTest& volume, SelectionSystem::EComponentMode componentMode ){
 	Scene_forEachVisible( GlobalSceneGraph(), volume, testselect_component_visible_selected( selector, test, componentMode ) );
 }
@@ -1954,7 +1990,7 @@ void RadiantSelectionSystem::Scene_TestSelect( Selector& selector, SelectionTest
 	switch ( mode )
 	{
 	case eEntity:
-		Scene_forEachVisible( GlobalSceneGraph(), view, testselect_entity_visible( selector, test ) );
+		Scene_TestSelect_Entity( selector, test, view );
 		break;
 	case ePrimitive:
 		Scene_TestSelect_Primitive( selector, test, view );

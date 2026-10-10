@@ -1,6 +1,10 @@
-﻿NetRadiant Custom - Large Maps
+NetRadiant Custom - Large Maps
 
 Features
+- Linked .map instances for mapper collaboration, expanded by the bundled q3map2.
+- Dockable Map Instances panel with visibility, source status and dates,
+  bulk add/remove, source opening, focus and refresh controls.
+- See docs/map-instancing.md for usage and current translation-only limits.
 - Simulated Map Lights preview with dynamic-light and sun shadows.
 - Beer-Lambert water light absorption in q3map2.
 - q3map2 riverbed precomputation and steady-state river water baking for sailing rivers.

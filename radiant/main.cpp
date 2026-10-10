@@ -90,6 +90,10 @@
 #include <QApplication>
 #include "gtkutil/glwidget.h"
 
+#ifdef RADIANT_MAP_INSTANCE_TEST
+#include "../regression_tests/q3map2/map_instance_mvp/editor_check.h"
+#endif
+
 void show_splash();
 void hide_splash();
 
@@ -398,6 +402,9 @@ int main( int argc, char* argv[] ){
 #endif
 
 	crt_init();
+#ifdef RADIANT_MAP_INSTANCE_TEST
+	instance_editor_test::installCrashTrace();
+#endif
 
 	streams_init();
 
@@ -412,6 +419,9 @@ int main( int argc, char* argv[] ){
 	QCoreApplication::setAttribute( Qt::AA_UseHighDpiPixmaps );
 
 	QApplication qapplication( argc, argv );
+#ifdef RADIANT_MAP_INSTANCE_TEST
+	instance_editor_test::installWindowFilter( qapplication );
+#endif
 	setlocale( LC_NUMERIC, "C" );
 	qInstallMessageHandler( qute_messageHandler );
 	QCoreApplication::setOrganizationName( "QtRadiant" );
@@ -469,7 +479,11 @@ int main( int argc, char* argv[] ){
 
 	remove_local_pid();
 
+#ifdef RADIANT_MAP_INSTANCE_TEST
+	const bool instanceTestPassed = instance_editor_test::check();
+#else
 	QApplication::exec();
+#endif
 
 	Map_Free();
 
@@ -487,5 +501,9 @@ int main( int argc, char* argv[] ){
 	// close the log file if any
 	Sys_LogFile( false );
 
+#ifdef RADIANT_MAP_INSTANCE_TEST
+	return instanceTestPassed? EXIT_SUCCESS : EXIT_FAILURE;
+#else
 	return EXIT_SUCCESS;
+#endif
 }

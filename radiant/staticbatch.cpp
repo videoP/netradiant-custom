@@ -601,9 +601,6 @@ void Chunk::render( Renderer& renderer, const VolumeTest& volume ) const {
 
 
 void StaticBatchCache::build(){
-	ScopeTimer timer( "  static batch build" );
-	clear();
-
 	scene::Node* worldspawn = Map_GetWorldspawn( g_map );
 	if ( worldspawn == nullptr ) {
 		/* Deliberately left invalid so this is retried. Worldspawn is only
@@ -611,8 +608,11 @@ void StaticBatchCache::build(){
 		   window pumps the event loop in between - so a repaint lands here
 		   mid-load, and marking the empty result valid would cache "nothing is
 		   batchable" for the rest of the session. */
+		clear();
 		return;
 	}
+	ScopeTimer timer( "  static batch build" );
+	clear();
 
 	g_reject_aabb = g_offered = g_accepted = g_reject_notbrush = g_reject_selected
 	              = g_reject_hidden = g_reject_transform = g_entities_seen = 0;

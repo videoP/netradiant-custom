@@ -276,7 +276,7 @@ public:
 };
 
 inline SelectionTestable* Instance_getSelectionTestable( scene::Instance& instance ){
-	return InstanceTypeCast<SelectionTestable>::cast( instance );
+	return Instance_isInstancePreview( instance )? nullptr : InstanceTypeCast<SelectionTestable>::cast( instance );
 }
 
 

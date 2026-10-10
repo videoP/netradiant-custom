@@ -222,10 +222,23 @@ EntityClass *Eclass_ForName( const char *name, bool has_brushes ){
 
 	EntityClasses::iterator i = g_entityClasses.find( name );
 	if ( i != g_entityClasses.end() && string_equal( ( *i ).first, name ) ) {
+		if ( string_equal( name, "func_instance" ) ) {
+			// Older gamepacks may describe this as a point placeholder.
+			( *i ).second->fixedsize = false;
+			( *i ).second->miscmodel_is = false;
+		}
 		return ( *i ).second;
 	}
 
-	EntityClass* e = EntityClass_Create_Default( name, has_brushes );
+	EntityClass* e;
+	if ( string_equal( name, "func_instance" ) ) {
+		e = EClass_Create( name, Vector3( 0.25f, 0.65f, 1.0f ),
+			"Linked .map source. Contents are protected previews. File / Reload Map Instances refreshes saved sources. This version supports translation only." );
+		EntityClass_insertAttribute( *e, "file", EntityClassAttribute( "string", "Source map", "", "Path relative to the containing map." ) );
+	}
+	else {
+		e = EntityClass_Create_Default( name, has_brushes );
+	}
 	return Eclass_InsertAlphabetized( e );
 }
 

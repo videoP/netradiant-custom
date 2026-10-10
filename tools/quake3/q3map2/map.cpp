@@ -30,6 +30,7 @@
 
 /* dependencies */
 #include "q3map2.h"
+#include <filesystem>
 
 
 
@@ -1520,6 +1521,10 @@ EntityCompileParams ParseEntityCompileParams( const entity_t& e, const entity_t 
    parses a single entity out of a map file
  */
 
+// Non-null while parsing an instance into its own temporary entity list.
+// The containing map owns global compiler settings.
+static const entity_t* instanceParentWorld = nullptr;
+
 static bool ParseMapEntity( bool onlyLights, bool noCollapseGroups, int mapEntityNum ){
 	/* eof check */
 	if ( !GetToken( true ) ) {
@@ -1528,6 +1533,8 @@ static bool ParseMapEntity( bool onlyLights, bool noCollapseGroups, int mapEntit
 
 	/* conformance check */
 	if ( !strEqual( token, "{" ) ) {
+		if ( instanceParentWorld != nullptr )
+			Error( "Invalid instance map: expected entity opening brace on line %d", scriptline );
 		Sys_Warning( "ParseEntity: { not found, found %s on line %d - last entity was at: <%4.2f, %4.2f, %4.2f>...\n"
 		             "Continuing to process map, but resulting BSP may be invalid.\n",
 		             token, scriptline, entities.back().origin[ 0 ], entities.back().origin[ 1 ], entities.back().origin[ 2 ] );
@@ -1546,6 +1553,8 @@ static bool ParseMapEntity( bool onlyLights, bool noCollapseGroups, int mapEntit
 	{
 		/* get initial token */
 		if ( !GetToken( true ) ) {
+			if ( instanceParentWorld != nullptr )
+				Error( "Invalid instance map: EOF without closing entity brace" );
 			Sys_Warning( "ParseEntity: EOF without closing brace\n"
 			             "Continuing to process map, but resulting BSP may be invalid.\n" );
 			return false;
@@ -1594,9 +1603,11 @@ static bool ParseMapEntity( bool onlyLights, bool noCollapseGroups, int mapEntit
 
 	/* ydnar: get classname */
 	const char *classname = mapEnt.classname();
+	if ( instanceParentWorld != nullptr && mapEntityNum == 0 && !mapEnt.classname_is( "worldspawn" ) )
+		Error( "Invalid instance map: first entity must be worldspawn" );
 
 	/* ydnar: only lights? */
-	if ( onlyLights && !striEqualPrefix( classname, "light" ) ) {
+	if ( onlyLights && !striEqualPrefix( classname, "light" ) && !striEqual( classname, "func_instance" ) ) {
 		entities.pop_back();
 		return true;
 	}
@@ -1604,9 +1615,11 @@ static bool ParseMapEntity( bool onlyLights, bool noCollapseGroups, int mapEntit
 	/* ydnar: determine if this is a func_group */
 	const bool funcGroup = striEqual( "func_group", classname );
 
-	const EntityCompileParams params = ParseEntityCompileParams( mapEnt, nullptr, funcGroup || mapEnt.mapEntityNum == 0 );
+	const EntityCompileParams params = ParseEntityCompileParams(
+		instanceParentWorld != nullptr && mapEntityNum == 0? *instanceParentWorld : mapEnt,
+		nullptr, funcGroup || mapEnt.mapEntityNum == 0 );
 
-	if( mapEnt.mapEntityNum == 0 )
+	if( mapEnt.mapEntityNum == 0 && instanceParentWorld == nullptr )
 		SetDefaultAmbientColor( params.ambientColor );
 
 	/* attach stuff to everything in the entity */
@@ -1661,6 +1674,123 @@ static bool ParseMapEntity( bool onlyLights, bool noCollapseGroups, int mapEntit
 }
 
 
+/* Expand editor-only map references after the parent parser reaches EOF.  The
+ * ordinary Q3Map2 parser still owns brush/patch parsing and shader setup. */
+static void NormalizeInstanceTextures( entity_t& ent, EBrushType format ){
+	if ( format != EBrushType::Bp )
+		return;
+	for ( brush_t& brush : ent.brushes ) {
+		for ( side_t& side : brush.sides ) {
+			if ( side.shaderInfo == nullptr )
+				continue; // generated collision bevel, never a rendered face
+			Vector3 texX, texY;
+			ComputeAxisBase( mapplanes[ side.planenum ].normal(), texX, texY );
+			for ( int axis = 0; axis < 2; ++axis ) {
+				side.vecs[ axis ].vec3() = texX * side.texMat[ axis ][ 0 ] + texY * side.texMat[ axis ][ 1 ];
+				side.vecs[ axis ][ 3 ] = side.texMat[ axis ][ 2 ];
+				side.vecs[ axis ] *= axis == 0? side.shaderInfo->shaderWidth : side.shaderInfo->shaderHeight;
+			}
+		}
+	}
+}
+
+static void TranslateInstanceTextures( entity_t& ent, const Vector3& offset ){
+	for ( brush_t& brush : ent.brushes )
+		for ( side_t& side : brush.sides )
+			for ( int axis = 0; axis < 2; ++axis )
+				side.vecs[ axis ][ 3 ] -= vector3_dot( side.vecs[ axis ].vec3(), offset );
+}
+
+static void ExpandMapInstances( const char *filename, bool onlyLights, bool noCollapseGroups, size_t firstEntity ){
+	if ( std::none_of( entities.begin() + firstEntity, entities.end(), []( const entity_t& ent ){ return ent.classname_is( "func_instance" ); } ) )
+		return;
+	if ( !onlyLights )
+		for ( entity_t& ent : entities )
+			NormalizeInstanceTextures( ent, g_brushType );
+	const std::filesystem::path parentPath( filename );
+	for ( size_t i = firstEntity; i < entities.size(); ) {
+		if ( !entities[ i ].classname_is( "func_instance" ) ) {
+			++i;
+			continue;
+		}
+
+		std::string sourceName( entities[ i ].valueForKey( "file" ) );
+		if ( sourceName.empty() )
+			Error( "func_instance in %s has no file key", filename );
+		std::replace( sourceName.begin(), sourceName.end(), '\\', '/' );
+		if ( !path_extension_is( sourceName.c_str(), "map" ) )
+			Error( "func_instance source must be a .map file: %s", sourceName.c_str() );
+		Vector3 offset( 0 );
+		if ( !strEmpty( entities[ i ].valueForKey( "origin" ) ) && !entities[ i ].read_keyvalue( offset, "origin" ) )
+			Error( "Invalid func_instance origin: %s in %s", sourceName.c_str(), filename );
+		for ( int axis = 0; axis < 3; ++axis )
+			if ( !std::isfinite( offset[ axis ] ) )
+				Error( "Non-finite func_instance origin: %s", sourceName.c_str() );
+		const char* fixup = entities[ i ].valueForKey( "fixup_style" );
+		if ( !strEmpty( fixup ) && !strEqual( fixup, "2" ) )
+			Error( "Instance name fixups are not supported yet; omit fixup_style or use 2: %s", sourceName.c_str() );
+		for ( const epair_t& pair : entities[ i ].epairs )
+			if ( striEqualPrefix( pair.key.c_str(), "replace" ) )
+				Error( "Instance parameter overrides are not supported yet: %s", sourceName.c_str() );
+		if ( !entities[ i ].brushes.empty() || !entities[ i ].patches.empty() )
+			Error( "func_instance must not contain geometry: %s in %s", sourceName.c_str(), filename );
+		const Vector3 angles = entities[ i ].vectorForKey( "angles" );
+		if ( std::fabs( atof( entities[ i ].valueForKey( "angle" ) ) ) > 0.0001f || angles != g_vector3_identity )
+			Error( "func_instance rotation is not supported yet: %s in %s", sourceName.c_str(), filename );
+		const std::filesystem::path sourcePath = ( parentPath.parent_path() / std::filesystem::path( sourceName ) ).lexically_normal();
+		if ( sourcePath == parentPath.lexically_normal() )
+			Error( "func_instance cannot reference its own map: %s", sourcePath.string().c_str() );
+		const std::string source = sourcePath.string();
+		Sys_Printf( "Expanding map instance: %s\n", source.c_str() );
+		if ( !LoadScriptFile( source.c_str(), -1 ) )
+			Error( "Cannot open func_instance source %s (from %s)", source.c_str(), filename );
+
+		std::vector<entity_t> parentEntities;
+		parentEntities.swap( entities );
+		instanceParentWorld = &parentEntities.front();
+		g_brushType = EBrushType::Undefined;
+		int mapEntityNum = 0;
+		while ( ParseMapEntity( onlyLights, noCollapseGroups, mapEntityNum++ ) ){}
+		if ( mapEntityNum == 1 )
+			Error( "Empty func_instance source: %s", source.c_str() );
+		instanceParentWorld = nullptr;
+		if ( !onlyLights )
+			for ( entity_t& ent : entities )
+				NormalizeInstanceTextures( ent, g_brushType );
+		std::vector<entity_t> sourceEntities;
+		sourceEntities.swap( entities );
+		parentEntities.swap( entities );
+		for ( entity_t& ent : sourceEntities ) {
+			if ( ent.classname_is( "func_instance" ) )
+				Error( "Nested func_instance is not supported yet: %s", source.c_str() );
+			if ( ent.classname_is( "func_instance_parms" ) || ent.classname_is( "func_instance_origin" ) )
+				Error( "Source-only instance metadata is not supported yet: %s in %s", ent.classname(), source.c_str() );
+			if ( ent.classname_is( "worldspawn" ) ) {
+				TranslateInstanceTextures( ent, offset );
+				AdjustBrushesForOrigin( ent, offset );
+				ent.origin = g_vector3_identity;
+				SetEntityBounds( ent );
+				for ( brush_t& brush : ent.brushes )
+					brush.entityNum = 0;
+				MoveBrushesToWorld( ent );
+			}
+			else {
+				// Decal patches are consumed by the compiler in world coordinates.
+				if ( ent.classname_is( "_decal" ) )
+					AdjustBrushesForOrigin( ent, offset );
+				ent.origin += offset;
+				ent.setKeyValue( "origin", ent.origin );
+				entities.push_back( std::move( ent ) );
+			}
+		}
+		entities.erase( entities.begin() + i );
+	}
+	// All brush faces now use explicit world-to-texture vectors. This permits
+	// instances saved with a different supported brush projection format.
+	g_brushType = EBrushType::Quake;
+}
+
+
 
 /*
    LoadMapFile()
@@ -1697,6 +1827,7 @@ void LoadMapFile( const char *filename, bool onlyLights, bool noCollapseGroups )
 	/* parse the map file */
 	int mapEntityNum = 0; /* track .map file entities numbering */
 	while ( ParseMapEntity( onlyLights, noCollapseGroups, mapEntityNum++ ) ){};
+	ExpandMapInstances( filename, onlyLights, noCollapseGroups, oldNumEntities );
 
 	/* light loading */
 	if ( onlyLights ) {

@@ -159,6 +159,10 @@ public:
 		eFiltered = 1 << 1,
 		eExcluded = 1 << 2,
 		eLayerHidden = 1 << 3,
+		eInstancePreview = 1 << 4,
+		eInstanceOwner = 1 << 5,
+		eMapLoadError = 1 << 6,
+		eInstanceHidden = 1 << 7,
 	};
 
 	class Symbiot
@@ -218,7 +222,7 @@ public:
 		m_state &= ~state;
 	}
 	bool visible() const {
-		return m_state == eVisible;
+		return ( m_state & ( eHidden | eFiltered | eExcluded | eLayerHidden | eInstanceHidden ) ) == eVisible;
 	}
 	bool excluded( unsigned int state ) const {
 		return ( m_state & state ) != 0;
@@ -814,16 +818,31 @@ public:
 	}
 };
 
+inline bool Instance_isInstancePreview( const scene::Instance& instance ){
+	for ( const NodeReference& node : instance.path() )
+		if ( node.get().excluded( scene::Node::eInstancePreview ) )
+			return true;
+	return false;
+}
+
 inline Selectable* Instance_getSelectable( scene::Instance& instance ){
-	return InstanceTypeCast<Selectable>::cast( instance );
+	return Instance_isInstancePreview( instance )? nullptr : InstanceTypeCast<Selectable>::cast( instance );
 }
 inline const Selectable* Instance_getSelectable( const scene::Instance& instance ){
-	return InstanceTypeCast<Selectable>::cast( instance );
+	return Instance_isInstancePreview( instance )? nullptr : InstanceTypeCast<Selectable>::cast( instance );
 }
 
 template<typename Functor>
 inline void Scene_forEachChildSelectable( const Functor& functor, const scene::Path& path ){
-	GlobalSceneGraph().traverse_subgraph( ChildInstanceWalker< InstanceApply<Selectable, Functor> >( functor ), path );
+	class Apply : public Functor {
+	public:
+		Apply( const Functor& value ) : Functor( value ){}
+		void operator()( scene::Instance& instance ) const {
+			if ( Selectable* selectable = Instance_getSelectable( instance ) )
+				Functor::operator()( *selectable );
+		}
+	};
+	GlobalSceneGraph().traverse_subgraph( ChildInstanceWalker<Apply>( Apply( functor ) ), path );
 }
 
 class SelectableSetSelected
@@ -845,23 +864,23 @@ inline const Bounded* Instance_getBounded( const scene::Instance& instance ){
 }
 
 inline Transformable* Instance_getTransformable( scene::Instance& instance ){
-	return InstanceTypeCast<Transformable>::cast( instance );
+	return Instance_isInstancePreview( instance )? nullptr : InstanceTypeCast<Transformable>::cast( instance );
 }
 inline const Transformable* Instance_getTransformable( const scene::Instance& instance ){
-	return InstanceTypeCast<Transformable>::cast( instance );
+	return Instance_isInstancePreview( instance )? nullptr : InstanceTypeCast<Transformable>::cast( instance );
 }
 
 
 inline ComponentSelectionTestable* Instance_getComponentSelectionTestable( scene::Instance& instance ){
-	return InstanceTypeCast<ComponentSelectionTestable>::cast( instance );
+	return Instance_isInstancePreview( instance )? nullptr : InstanceTypeCast<ComponentSelectionTestable>::cast( instance );
 }
 
 inline ComponentEditable* Instance_getComponentEditable( scene::Instance& instance ){
-	return InstanceTypeCast<ComponentEditable>::cast( instance );
+	return Instance_isInstancePreview( instance )? nullptr : InstanceTypeCast<ComponentEditable>::cast( instance );
 }
 
 inline ComponentSnappable* Instance_getComponentSnappable( scene::Instance& instance ){
-	return InstanceTypeCast<ComponentSnappable>::cast( instance );
+	return Instance_isInstancePreview( instance )? nullptr : InstanceTypeCast<ComponentSnappable>::cast( instance );
 }
 
 
@@ -912,7 +931,7 @@ public:
 
 inline void Entity_setSelected( scene::Instance& entity, bool selected ){
 	scene::Node& node = entity.path().top();
-	if ( node_is_group( node ) ) {
+	if ( node_is_group( node ) && !node.excluded( scene::Node::eInstanceOwner ) ) {
 		Node_getTraversable( node )->traverse( SelectChildren( entity.path() ) );
 	}
 	else
@@ -922,7 +941,7 @@ inline void Entity_setSelected( scene::Instance& entity, bool selected ){
 }
 
 inline bool Entity_isSelected( scene::Instance& entity ){
-	if ( node_is_group( entity.path().top() ) ) {
+	if ( node_is_group( entity.path().top() ) && !entity.path().top().get().excluded( scene::Node::eInstanceOwner ) ) {
 		return entity.childSelected();
 	}
 	return Instance_isSelected( entity );

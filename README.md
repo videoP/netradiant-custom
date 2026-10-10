@@ -11,6 +11,7 @@ This build adds large-map performance tools, simulated lighting preview, translu
 - Spacial index for view culling
 - Batched static geometry
 - Simulated map lights
+- [Linked map instances for collaboration](docs/map-instancing.md) (first milestone)
 - Enhanced stats overlay
 - Q3Map2 Gridded CullSides (-cullgrid)
 - Q3Map2 Gridded FixTJunctions (-tjgrid)

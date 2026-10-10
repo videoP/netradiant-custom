@@ -111,6 +111,8 @@ public:
 	}
 
 	bool pre( const scene::Path& path, scene::Instance& instance ) const override {
+		if ( path.top().get().excluded( scene::Node::eInstancePreview ) )
+			return false;
 		if( path.top().get().visible() ){
 			Selectable* selectable = Instance_getSelectable( instance );
 
@@ -277,6 +279,10 @@ public:
 		: m_mode( mode ), m_compmode( compmode ), m_selectable( 0 ){
 	}
 	bool pre( const scene::Path& path, scene::Instance& instance ) const override {
+		if ( path.top().get().excluded( scene::Node::eInstancePreview ) ) {
+			m_selectable = 0;
+			return false;
+		}
 		if( !path.top().get().visible() ){
 			m_selectable = 0;
 			return false;
@@ -721,6 +727,8 @@ public:
 	EntityFindByPropertyValueWalker( const EntityMatcher& entityMatcher ) : m_entityMatcher( entityMatcher ){
 	}
 	bool pre( const scene::Path& path, scene::Instance& instance ) const override {
+		if ( path.top().get().excluded( scene::Node::eInstancePreview ) )
+			return false;
 		if( !path.top().get().visible() ){
 			return false;
 		}

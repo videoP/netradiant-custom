@@ -23,6 +23,8 @@
 
 #include "iscenegraph.h"
 #include <unordered_set>
+#include <string>
+#include <vector>
 #include "generic/callback.h"
 #include "signal/signalfwd.h"
 #include "string/stringfwd.h"
@@ -100,6 +102,21 @@ const float g_MaxWorldCoord = 64 * 1024;
 const float g_MinWorldCoord = -64 * 1024;
 
 void Map_LoadFile( const char* filename );
+void Map_ReloadInstances();
+struct MapInstanceInfo {
+	scene::Node* node;
+	std::string file, source, placement, status, error;
+	long long modified;
+	bool visible, selected;
+};
+std::vector<MapInstanceInfo> Map_GetInstances();
+void Map_ReloadInstanceSources( const std::vector<scene::Node*>& nodes );
+void Map_SetInstanceVisible( scene::Node* node, bool visible );
+void Map_SelectInstances( const std::vector<scene::Node*>& nodes, bool focus = false );
+void Map_RemoveInstances( const std::vector<scene::Node*>& nodes );
+void CreateMapInstance();
+void OpenMapInstanceSource();
+std::size_t Map_AddInstances( const std::vector<std::string>& files, const Vector3& origin );
 bool Map_SaveFile( const char* filename );
 
 void Map_New();

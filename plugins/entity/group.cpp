@@ -321,6 +321,7 @@ class GroupInstance :
 		TypeCasts(){
 			m_casts = TargetableInstance::StaticTypeCasts::instance().get();
 			InstanceStaticCast<GroupInstance, Renderable>::install( m_casts );
+			InstanceIdentityCast<GroupInstance>::install( m_casts );
 #if 0
 			InstanceStaticCast<GroupInstance, Transformable>::install( m_casts );
 #endif
@@ -329,13 +330,21 @@ class GroupInstance :
 			return m_casts;
 		}
 	};
+	class MapInstanceTypeCasts : public TypeCasts {
+	public:
+		MapInstanceTypeCasts(){
+			InstanceStaticCast<GroupInstance, Transformable>::install( get() );
+		}
+	};
 
 	Group& m_contained;
 public:
 	typedef LazyStatic<TypeCasts> StaticTypeCasts;
 
 	GroupInstance( const scene::Path& path, scene::Instance* parent, Group& group ) :
-		TargetableInstance( path, parent, this, StaticTypeCasts::instance().get(), group.getEntity(), *this ),
+		TargetableInstance( path, parent, this,
+			string_equal( group.getEntity().getClassName(), "func_instance" )? LazyStatic<MapInstanceTypeCasts>::instance().get() : StaticTypeCasts::instance().get(),
+			group.getEntity(), *this ),
 		TransformModifier( Group::TransformChangedCaller( group ), ApplyTransformCaller( *this ) ),
 		m_contained( group ){
 		m_contained.instanceAttach( Instance::path() );
@@ -376,11 +385,15 @@ public:
 #endif
 
 	void evaluateTransform(){
-		if ( getType() == TRANSFORM_PRIMITIVE ) {
+		if ( getType() == TRANSFORM_PRIMITIVE && getRotation() == c_rotation_identity && getScale() == c_scale_identity && getSkew() == c_skew_identity ) {
 			m_contained.translate( getTranslation() );
 		}
 	}
 	void applyTransform(){
+		if ( getRotation() != c_rotation_identity || getScale() != c_scale_identity || !( getSkew() == c_skew_identity ) ) {
+			globalWarningStream() << "Map instances currently support translation only.\n";
+			return;
+		}
 		m_contained.revertTransform();
 		evaluateTransform();
 		m_contained.freezeTransform();

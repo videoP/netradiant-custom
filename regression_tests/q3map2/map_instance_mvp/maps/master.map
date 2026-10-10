@@ -1,0 +1,13 @@
+{
+"classname" "worldspawn"
+}
+{
+"classname" "func_instance"
+"file" "room.map"
+"origin" "2048 0 0"
+}
+{
+"classname" "func_instance"
+"file" "room.map"
+"origin" "-2048 0 0"
+}

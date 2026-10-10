@@ -110,7 +110,7 @@ try {
     # would otherwise share a filename while holding different binaries, and
     # the tester would have no way to tell which one they were sent - so say
     # so, and go to minute resolution for the ones that need telling apart.
-    $status = & git -C $root status --porcelain 2>$null
+    $status = & git -c core.excludesFile= -C $root status --porcelain 2>$null
     if ($LASTEXITCODE -eq 0 -and $status) { $dirty = $true }
 } catch { }
 
@@ -134,7 +134,13 @@ New-Item -ItemType Directory $stage | Out-Null
 try {
     if ($Standalone) {
         # everything needed to run on a machine with nothing installed
-        Copy-Item (Join-Path $install '*') $stage -Recurse -Force
+        # Local preferences, logs and renamed development executables are not
+        # release assets. Leave the developer's runnable install untouched.
+        Get-ChildItem -LiteralPath $install | Where-Object {
+            $_.Name -notin @('settings', 'pending') -and
+            $_.Name -notmatch '^radiant(?:[.-].*)?\.exe(?:\.old)?$|\.log$' -or
+            $_.Name -eq 'radiant.exe'
+        } | Copy-Item -Destination $stage -Recurse -Force
     }
     else {
         foreach ($item in $items) {
@@ -144,6 +150,11 @@ try {
             Copy-Item $item.Source $target
         }
     }
+
+    $docsTarget = Join-Path $stage 'docs'
+    if (-not (Test-Path $docsTarget)) { New-Item -ItemType Directory $docsTarget | Out-Null }
+    Copy-Item (Join-Path $root 'docs/map-instancing.md') $docsTarget
+    Copy-Item (Join-Path $root 'RELEASE-NOTES.txt') $stage
 
     if ($Standalone) {
         $installText = @"
@@ -181,6 +192,10 @@ INSTALL
 $installText
 
 USING IT
+  Map instancing: File -> Add Map Instance links existing .map files. Use
+  View -> Map Instances for visibility, source status, refresh and removal.
+  See docs/map-instancing.md for the collaboration workflow and current limits.
+
   Everything is off by default, so out of the box this behaves exactly like
   the build you already have.
 
@@ -261,5 +276,10 @@ WHAT TO SEND BACK
     Write-Output $zipPath
 }
 finally {
-    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+    $resolvedStage = [System.IO.Path]::GetFullPath($stage)
+    $resolvedTemp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+    if (-not $resolvedStage.StartsWith($resolvedTemp, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to clean a staging directory outside the temporary directory: $resolvedStage"
+    }
+    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
 }

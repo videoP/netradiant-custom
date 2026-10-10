@@ -40,7 +40,9 @@ class LayersParser
 	Layers& m_layers;
 	std::vector<Layer::iterator> m_layersVec; // vector to access layers by index
 	int m_currentLayer = LAYERIDX0;
+	bool m_failed = false;
 public:
+	bool failed() const { return m_failed; }
 	LayersParser( scene::Node& root ) : m_layers( *Node_getLayers( root ) ){
 	}
 	void construct_tree(){
@@ -112,6 +114,7 @@ public:
 			return true;
 		}
 		if( !Tokeniser_getInteger( tokeniser, m_currentLayer ) ){
+			m_failed = true;
 			return false;
 		}
 		else if( m_currentLayer <= LAYERIDXPARENT || m_currentLayer >= static_cast<int>( m_layersVec.size() ) ){
@@ -216,7 +219,9 @@ NodeSmartReference Entity_parseTokens( Tokeniser& tokeniser, EntityCreator& enti
 		if ( !strcmp( token, "}" ) ) { // end entity
 			if ( entity == g_nullNode ) {
 				// entity does not have brushes
-				entity = Entity_create( entityTable, GlobalEntityClassManager().findOrInsert( classname, false ), keyValues );
+				entity = Entity_create( entityTable, GlobalEntityClassManager().findOrInsert( classname, string_equal( classname, "func_instance" ) ), keyValues );
+				if ( string_equal( classname, "func_instance" ) )
+					entity.get().enable( scene::Node::eInstanceOwner );
 			}
 			return entity;
 		}
@@ -276,10 +281,12 @@ NodeSmartReference Entity_parseTokens( Tokeniser& tokeniser, EntityCreator& enti
 }
 
 void Map_Read( scene::Node& root, Tokeniser& tokeniser, EntityCreator& entityTable, const PrimitiveParser& parser ){
+	root.disable( scene::Node::eMapLoadError );
 	g_parseStats.reset();
 
 	LayersParser layersParser( root );
 	if( !layersParser.read_layers( tokeniser ) ){
+		root.enable( scene::Node::eMapLoadError );
 		layersParser.construct_tree(); // construct anytime to have at least one layer, e.g. when empty .map
 		return;
 	}
@@ -289,7 +296,12 @@ void Map_Read( scene::Node& root, Tokeniser& tokeniser, EntityCreator& entityTab
 	for (;; )
 	{
 		tokeniser.nextLine();
-		if ( !layersParser.read_layer( tokeniser ) || !tokeniser.getToken() ) { // { or 0
+		if ( !layersParser.read_layer( tokeniser ) ) {
+			if ( layersParser.failed() )
+				root.enable( scene::Node::eMapLoadError );
+			break;
+		}
+		if ( !tokeniser.getToken() ) { // { or 0
 			break;
 		}
 		Layer *entityLayer = layersParser.getCurrentLayer();
@@ -297,6 +309,7 @@ void Map_Read( scene::Node& root, Tokeniser& tokeniser, EntityCreator& entityTab
 		NodeSmartReference entity( Entity_parseTokens( tokeniser, entityTable, parser, count_entities, layersParser ) );
 
 		if ( entity == g_nullNode ) {
+			root.enable( scene::Node::eMapLoadError );
 			globalErrorStream() << "entity " << count_entities << ": parse error\n";
 			return;
 		}
