@@ -11,12 +11,14 @@
  */
 #include "q3map2.h"
 #include "light_incremental.h"
+#include "bspfile_rbsp.h"
 #include "lightcacheformat.h"
 #include "lightcachecompression.h"
 #include "surface_extra.h"
 
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -114,6 +116,35 @@ void sourceToken( Hash& hash, const char *token ) {
 	else hash.text( token );
 }
 
+void entityValue( Hash& hash, const std::string& key, const std::string& value ) {
+	// Entity names, targets and other strings must retain their exact spelling.
+	// Spatial keys are floats: editor decimal/whitespace changes do not move
+	// an entity and must not force a BSP rebuild when only a light was edited.
+	const int components = striEqual( key.c_str(), "origin" ) || striEqual( key.c_str(), "angles" )? 3
+	                     : striEqual( key.c_str(), "angle" )? 1 : 0;
+	std::array<float, 3> numbers{};
+	const char *cursor = value.c_str();
+	bool numeric = components != 0;
+	for ( int i = 0; numeric && i < components; ++i ) {
+		char *end;
+		numbers[i] = strtof( cursor, &end );
+		numeric = end != cursor && std::isfinite( numbers[i] );
+		cursor = end;
+	}
+	while ( *cursor && std::isspace( static_cast<unsigned char>( *cursor ) ) ) ++cursor;
+	numeric = numeric && *cursor == '\0';
+	hash.add( numeric );
+	if ( numeric ) {
+		for ( int i = 0; i < components; ++i ) hash.add( numbers[i] == 0? 0.f : numbers[i] );
+	}
+	else hash.text( value.c_str() );
+}
+
+void requireBSPUpdate() {
+	Error( "Source geometry or non-light entities changed. Rebuild BSP/VIS for geometry edits; "
+	       "for entity-only edits, run -bsp -onlyents before lighting." );
+}
+
 Digest sourceGeometry( const char *name ) {
 	if ( !LoadScriptFile( name, -1, false ) )
 		Error( "Incremental lighting needs the source map: %s", name );
@@ -149,7 +180,7 @@ Digest sourceGeometry( const char *name ) {
 		if ( !closed ) Error( "Incomplete map entity" );
 		// Key order has no meaning, and Radiant moves classname on save.
 		std::stable_sort( epairs.begin(), epairs.end(), []( const auto& a, const auto& b ) { return a.first < b.first; } );
-		for ( const auto& [key, value] : epairs ) { entity.text( key.c_str() ); entity.text( value.c_str() ); }
+		for ( const auto& [key, value] : epairs ) { entity.text( key.c_str() ); entityValue( entity, key, value ); }
 		if ( !isLight || primitive ) result.add( entity.value );
 	}
 	return result.value;
@@ -429,7 +460,7 @@ bool loadCache() {
 	// A light-only invocation cannot repair geometry which the BSP stage has
 	// never seen. Stop before writing the BSP, even if settings also changed.
 	if ( old.geometry == current.geometry && old.map != current.map )
-		Error( "Source geometry or non-light entities changed. Rebuild BSP/VIS before lighting." );
+		requireBSPUpdate();
 	cacheReason = "compiler or build options changed";
 	if ( old.settings != current.settings ) return false;
 	cacheReason = "shader, texture or surface-extra inputs changed";
@@ -611,9 +642,9 @@ void LightCacheGeometry() {
 	// The BSP supplies geometry, collision and visibility. Its output lighting
 	// is not an input: samples, chart placements and preview live in .lightcache.
 	Hash hash;
-	// Version the digest rules so a cache from the old textual map check
+	// Version the digest rules so a cache from an older map/entity check
 	// falls back cleanly instead of reporting an unbuilt geometry edit.
-	hash.text( "lightcache canonical geometry 2" );
+	hash.text( "lightcache canonical geometry 3" );
 	const auto lump = [&hash]( const auto& values ) {
 		hash.add( values.size() );
 		hash.bytes( values.data(), values.size() * sizeof( values[0] ) );
@@ -642,14 +673,60 @@ void LightCacheGeometry() {
 			epairs.emplace_back( ep.key.c_str(), ep.value.c_str() );
 		}
 		std::stable_sort( epairs.begin(), epairs.end(), []( const auto& a, const auto& b ) { return a.first < b.first; } );
-		for ( const auto& [key, value] : epairs ) { hash.text( key.c_str() ); hash.text( value.c_str() ); }
+		for ( const auto& [key, value] : epairs ) { hash.text( key.c_str() ); entityValue( hash, key, value ); }
 	}
 	current.geometry = hash.value;
 	std::ifstream file( cacheName, std::ios::binary );
 	Header old;
 	if ( read( file, old ) && old.magic == current.magic && old.checksum == headerChecksum( old ) &&
 	     old.geometry == current.geometry && old.map != current.map )
-		Error( "Source geometry or non-light entities changed. Rebuild BSP/VIS before lighting." );
+		requireBSPUpdate();
+}
+
+void LightCacheRefreshEntityLights() {
+	if ( !lightCacheRequested ) return;
+	const bool keep = entities[0].boolForKey( "_keepLights" );
+	const bool switched = g_game->load == LoadRBSPFile;
+	if ( !keep && !switched ) return;
+	std::vector<size_t> compiled, sourceLights;
+	for ( size_t i = 1; i < entities.size(); ++i ) {
+		const entity_t& entity = entities[i];
+		if ( !entity.classname_prefixed( "light" ) ) continue;
+		if ( i < size_t( numBSPEntities ) ) compiled.push_back( i );
+		else if ( keep || ( switched && !strEmpty( entity.valueForKey( "targetname" ) ) ) )
+			sourceLights.push_back( i );
+	}
+	// Preserve BSP entity indices and generated switchable styles. A move or
+	// intensity/color edit needs only fresh epairs, not a new BSP/VIS tree.
+	// Changed style groups require the normal entity update to assign styles.
+	if ( compiled.size() != sourceLights.size() )
+		Error( "BSP-stored lights were added or removed. Run -bsp -onlyents before lighting." );
+	for ( size_t i = 0; i < compiled.size(); ++i ) {
+		const entity_t& before = entities[compiled[i]];
+		const entity_t& after = entities[sourceLights[i]];
+		const bool named = switched && !strEmpty( before.valueForKey( "targetname" ) );
+		const int sourceStyle = before.intForKey( named? "switch_style" : "style" );
+		if ( !strEqual( before.valueForKey( "targetname" ), after.valueForKey( "targetname" ) ) ||
+		     sourceStyle != after.intForKey( "style" ) )
+			Error( "BSP-stored light style groups changed. Run -bsp -onlyents before lighting." );
+	}
+	for ( size_t i = 0; i < compiled.size(); ++i ) {
+		entity_t& before = entities[compiled[i]];
+		entity_t& after = entities[sourceLights[i]];
+		const bool named = switched && !strEmpty( before.valueForKey( "targetname" ) );
+		const int style = before.intForKey( "style" );
+		const int switchStyle = before.intForKey( "switch_style" );
+		before.epairs = std::move( after.epairs );
+		if ( named ) {
+			before.setKeyValue( "style", style );
+			if ( switchStyle != LS_NORMAL ) before.setKeyValue( "switch_style", switchStyle );
+		}
+		// The compiled entity is authoritative for game output and lighting;
+		// discard the map copy so it cannot contribute a second shadow model.
+		after.epairs.clear();
+	}
+	if ( !compiled.empty() )
+		Sys_Printf( "Refreshed %zu BSP-stored light entities from source (styles preserved).\n", compiled.size() );
 }
 
 void LightCachePrepare() {

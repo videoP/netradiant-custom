@@ -23,6 +23,8 @@
 
 #include <unordered_set>
 #include <filesystem>
+#include <cerrno>
+#include <cstring>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QDateTime>
@@ -2631,6 +2633,7 @@ void map_autocaulk_selected(){
 			NodeTypeCast<MapExporter>::cast( *box[i] )->exportTokens( writer );
 			box[i]->DecRef();
 		}
+		writer.release();
 		// close world
 		file << "\n}\n";
 		// spawn
@@ -2672,13 +2675,11 @@ void map_autocaulk_selected(){
 			}
 		};
 		format.writeGraph( GlobalSceneGraph().root(), traverse_selected_point_entities, file );
-
-		writer.release();
 	}
 
+	StringOutputStream command( 256 );
 	{	// compile
-		StringOutputStream str( 256 );
-		str << AppPath_get() << "q3map2." << RADIANT_EXECUTABLE
+		command << AppPath_get() << "q3map2." << RADIANT_EXECUTABLE
 		    << " -game quake3"
 		    << " -fs_basepath " << Quoted( EnginePath_get() )
 		    << " -fs_homepath " << Quoted( g_qeglobals.m_userEnginePath )
@@ -2686,7 +2687,10 @@ void map_autocaulk_selected(){
 		    << " -autocaulk -fulldetail "
 		    << Quoted( filename );
 		// run
-		Q_Exec( nullptr, str.c_str(), nullptr, false, true );
+		if ( !Q_Exec( nullptr, command.c_str(), nullptr, false, true ) ) {
+			globalErrorStream() << "map_autocaulk_selected(): failed to execute " << command.c_str() << '\n';
+			return;
+		}
 	}
 
 	typedef std::map<std::size_t, CopiedString> CaulkMap;
@@ -2696,7 +2700,9 @@ void map_autocaulk_selected(){
 
 		TextFileInputStream file( filename );
 		if( file.failed() ){
-			globalErrorStream() << "reading " << filename << " failure\n";
+			const int error = errno;
+			globalErrorStream() << "reading " << filename << " failure: " << std::strerror( error )
+			                    << "; q3map2 command: " << command.c_str() << '\n';
 			return;
 		}
 

@@ -2978,13 +2978,14 @@ int LightMain( Args& args ){
 
 	/* load map file */
 	LightCacheObserveScripts( false );
-	if ( !entities[ 0 ].boolForKey( "_keepLights" ) ) {
+	if ( lightCacheRequested || !entities[ 0 ].boolForKey( "_keepLights" ) ) {
 		char *mapFileName = ExpandArg( fileName );
 		if ( !path_extension_is( fileName, "reg" ) ) /* not .reg */
 			path_set_extension( mapFileName, ".map" );
 
 		LoadMapFile( CopiedString( mapFileName ).c_str(), true, false );
 	}
+	LightCacheRefreshEntityLights();
 	LightCacheObserveScripts( true );
 
 	/* set the entity/model origins and init yDrawVerts */

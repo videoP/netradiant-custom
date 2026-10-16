@@ -21,6 +21,7 @@ void LightCacheTimed( const char *name, Function&& function ) {
 void LightCacheSettings( Args& args );
 void LightCacheBegin( const char *mapName );
 void LightCacheGeometry();
+void LightCacheRefreshEntityLights();
 void LightCacheObserveScripts( bool enabled );
 void LightCachePrepare();
 bool LightCacheReusable();

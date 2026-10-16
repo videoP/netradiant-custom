@@ -163,11 +163,15 @@ def main():
 
     assert trace_cache.read_bytes()[:8] == b"QLTRACE2"
     assert len(trace_cache.read_bytes()) < 88 + len(decompress_section(trace_cache.read_bytes()[88:]))
-    assert cache.read_bytes()[:8] == b"QLTCACH3"
+    assert cache.read_bytes()[:8] == b"QLTCACH4"
 
-    # Read existing uncompressed containers as well as the new compressed ones.
+    # Read legacy uncompressed traces and rebuild legacy lighting sample layouts.
     trace_data = trace_cache.read_bytes()
     trace_cache.write_bytes(replace_trace_payload(trace_data, decompress_section(trace_data[88:]), compressed=False))
+    before = bsp.read_bytes()
+    output = run("-light", "-fast", "-incremental")
+    assert "Cache: valid" in output and "Trace cache: reused" in output, output
+    compare(before, bsp.read_bytes())
     cache_data = cache.read_bytes()
     header = list(struct.unpack_from("<13Q", cache_data))
     samples = decompress_section(cache_data[104:header[10]])
@@ -180,9 +184,10 @@ def main():
     cache.write_bytes(struct.pack("<13Q", *header) + samples + preview)
     before = bsp.read_bytes()
     output = run("-light", "-fast", "-incremental")
-    assert "Cache: valid" in output and "Trace cache: reused" in output, output
+    # Legacy sample layouts must rebuild; their previews remain readable.
+    assert "Cache: full lighting" in output, output
     compare(before, bsp.read_bytes())
-    assert cache.read_bytes()[:8] == b"QLTCACH3", "legacy lighting cache was not upgraded"
+    assert cache.read_bytes()[:8] == b"QLTCACH4", "legacy lighting cache was not upgraded"
     trace_cache.write_bytes(trace_data)
     print("PASS compressed containers and legacy uncompressed loading", flush=True)
 
@@ -314,7 +319,7 @@ def main():
     def cached_preview():
         data = cache.read_bytes()
         header = struct.unpack_from("<13Q", data)
-        assert data[:8] == b"QLTCACH3"
+        assert data[:8] == b"QLTCACH4"
         offset, size = header[10:12]
         assert offset + size == len(data)
         return decompress_section(data[offset:offset + size])
@@ -413,6 +418,63 @@ def main():
     source.write_text(original)
     run("-light", "-fast", "-lightcache")
     print("PASS duplicate light deletion and reordered accumulation", flush=True)
+
+    # Saving a moved light may also rewrite other entities' spatial decimals.
+    # Those values are parsed as floats, while target names remain exact strings.
+    spot = point(extra='"target" "aim"')
+    original = fixture(spot).replace('"origin" "0 0 48"',
+                                    '"origin" "0 0 48"\n"angles" "0 90 0"\n"angle" "90"')
+    source.write_text(original)
+    run("-bsp", "-meta")
+    run("-vis", "-fast")
+    run("-light", "-fast", "-lightcache")
+    source.write_text(original.replace('"origin" "0 0 48"', '"origin" "-0.000000  0.000000 48.000000 "')
+                     .replace('"angles" "0 90 0"', '"angles" "0.000000 90.000000 0.000000"')
+                     .replace('"angle" "90"', '"angle" "90.000000"')
+                     .replace(spot, point("64 0 96", extra='"target" "aim"')))
+    output = run("-light", "-fast", "-incremental")
+    assert "Cache: valid" in output and "Trace cache: reused" in output, output
+    incremental = bsp.read_bytes()
+    run("-light", "-fast", "-lightcache")
+    compare(incremental, bsp.read_bytes())
+    # Formatting changes in the compiled entities must also retain the cache.
+    run("-bsp", "-onlyents")
+    output = run("-light", "-fast", "-incremental")
+    assert "Cache: valid" in output and "Trace cache: reused" in output, output
+    compare(incremental, bsp.read_bytes())
+    print("PASS moved light with equivalent entity origin/angles formatting", flush=True)
+
+    # A real spotlight target move needs refreshed BSP entities, not BSP/VIS.
+    before = bsp.read_bytes()
+    source.write_text(source.read_text().replace('"origin" "128 0 16"', '"origin" "96 0 16"'))
+    output = run("-light", "-fast", "-incremental", fail=True)
+    assert "-bsp -onlyents" in output, output
+    assert bsp.read_bytes() == before
+    run("-bsp", "-onlyents")
+    updated = bsp.read_bytes()
+    assert lumps(updated)[1:] == lumps(before)[1:], "onlyents changed geometry, VIS or lighting"
+    run("-light", "-fast", "-incremental")
+    incremental = bsp.read_bytes()
+    bsp.write_bytes(updated)
+    run("-light", "-fast", "-lightcache")
+    compare(incremental, bsp.read_bytes())
+    print("PASS entity-only edits use onlyents without rebuilding BSP/VIS", flush=True)
+
+    # Numeric-looking target names must not acquire spatial normalization.
+    source.write_text(source.read_text().replace('"targetname" "aim"', '"targetname" "01"'))
+    run("-bsp", "-onlyents")
+    run("-light", "-fast", "-lightcache")
+    before = bsp.read_bytes()
+    source.write_text(source.read_text().replace('"targetname" "01"', '"targetname" "1"'))
+    output = run("-light", "-fast", "-incremental", fail=True)
+    assert "-bsp -onlyents" in output, output
+    assert bsp.read_bytes() == before
+    source.write_text(fixture(point()))
+    run("-bsp", "-meta")
+    run("-vis", "-fast")
+    geometry = bsp.read_bytes()
+    run("-light", "-fast", "-lightcache")
+    print("PASS numeric-looking entity names retain exact spelling", flush=True)
 
     for name, light in [("move", point("64 0 96")),
                         ("color/intensity", point("64 0 96", "1 0.2 0.1", 350)),
